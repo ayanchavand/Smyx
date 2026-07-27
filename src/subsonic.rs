@@ -99,6 +99,11 @@ pub struct PlaylistsContainer {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SongDetailData {
+    pub song: Option<SubsonicSong>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PlaylistDetailData {
     pub playlist: Option<PlaylistDetailContainer>,
 }
@@ -246,6 +251,12 @@ impl SubsonicClient {
     pub fn ping(&self) -> Result<()> {
         let _data: PingData = self.get_json("ping.view", &[])?;
         Ok(())
+    }
+
+    /// Fetch details for a single song by ID.
+    pub fn get_song(&self, id: &str) -> Result<SubsonicSong> {
+        let data: SongDetailData = self.get_json("getSong.view", &[("id", id)])?;
+        data.song.ok_or_else(|| anyhow!("Song not found"))
     }
 
     /// Fetch all playlists.

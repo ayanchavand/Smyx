@@ -1933,15 +1933,31 @@ fn handle_engine_event(app: &mut App, ev: EngineEvent, meta_tx: &flume::Sender<T
                 tokio::task::spawn_blocking(move || {
                     let client_opt = subsonic.lock().unwrap().clone();
                     if let Some(client) = client_opt {
-                        let cover_bytes = client.get_cover_art(&track_id).ok();
+                        let mut title = String::new();
+                        let mut artist = String::new();
+                        let mut album = String::new();
+                        let mut duration_ms = 0;
+                        let mut cover_id = track_id.clone();
+
+                        if let Ok(song) = client.get_song(&track_id) {
+                            title = song.title;
+                            artist = song.artist.unwrap_or_default();
+                            album = song.album.unwrap_or_default();
+                            duration_ms = song.duration.map(|d| d * 1000).unwrap_or(0);
+                            if let Some(c) = song.cover_art {
+                                cover_id = c;
+                            }
+                        }
+
+                        let cover_bytes = client.get_cover_art(&cover_id).ok();
                         let img = cover_bytes.and_then(|b| image::load_from_memory(&b).ok());
                         let theme = img.as_ref().map(|i| derive_theme(i, "album ✦"));
                         let _ = tx.send(TrackMeta {
                             uri: format!("subsonic:track:{}", track_id),
-                            title: String::new(),
-                            artist: String::new(),
-                            album: String::new(),
-                            duration_ms: 0,
+                            title,
+                            artist,
+                            album,
+                            duration_ms,
                             image: img,
                             theme,
                         });
