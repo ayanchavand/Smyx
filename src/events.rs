@@ -171,7 +171,9 @@ pub fn handle_key(
             app.selected = app.first_selectable();
             app.status = format!("sorted by {}", m.label());
         }
-        KeyCode::Char('a') => {}
+        KeyCode::Char('a') => {
+            open_action_menu(app);
+        }
         KeyCode::Tab | KeyCode::Char(']') => {
             app.searching = false;
             app.section = app.section.shift(1);
@@ -281,10 +283,79 @@ pub fn handle_action_key(
             };
             app.actions = None;
         }
+        ActionKind::AddToPlaylist { playlist_id, track_uri } => {
+            let song_id = track_uri.strip_prefix("subsonic:track:").unwrap_or(&track_uri).to_string();
+            if let Some(subsonic) = app.subsonic.lock().unwrap().clone() {
+                let pid = playlist_id.clone();
+                let sid = song_id.clone();
+                std::thread::spawn(move || {
+                    let _ = subsonic.add_to_playlist(&pid, &sid);
+                });
+                app.status = "added track to playlist".to_string();
+            } else {
+                app.status = "not connected".to_string();
+            }
+            app.actions = None;
+        }
         _other => {
             app.actions = None;
         }
     }
+}
+
+pub fn open_action_menu(app: &mut App) {
+    let Some(item) = app.cur_items().get(app.selected).cloned() else {
+        return;
+    };
+    if item.is_header {
+        return;
+    }
+
+    let mut items = Vec::new();
+
+    if item.is_track {
+        items.push(ActionItem {
+            label: "Add to playlist...".to_string(),
+            kind: ActionKind::AddToPlaylistMenu {
+                track_uri: item.uri.clone(),
+            },
+        });
+        items.push(ActionItem {
+            label: format!("Play {}", item.name),
+            kind: ActionKind::Play {
+                uri: item.uri.clone(),
+                name: item.name.clone(),
+            },
+        });
+    } else {
+        items.push(ActionItem {
+            label: format!("Open {}", item.name),
+            kind: ActionKind::Open {
+                uri: item.uri.clone(),
+                name: item.name.clone(),
+            },
+        });
+        items.push(ActionItem {
+            label: format!("Play {}", item.name),
+            kind: ActionKind::Play {
+                uri: item.uri.clone(),
+                name: item.name.clone(),
+            },
+        });
+    }
+
+    items.push(ActionItem {
+        label: "Copy Link".to_string(),
+        kind: ActionKind::CopyLink {
+            uri: item.uri.clone(),
+        },
+    });
+
+    app.actions = Some(ActionMenu {
+        title: item.name.clone(),
+        items,
+        selected: 0,
+    });
 }
 
 pub fn copy_to_clipboard(text: &str) -> bool {

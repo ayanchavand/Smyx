@@ -271,6 +271,15 @@ impl SubsonicClient {
         Ok(data.playlist.map(|p| p.entry).unwrap_or_default())
     }
 
+    /// Add a track to a playlist via Subsonic API updatePlaylist endpoint.
+    pub fn add_to_playlist(&self, playlist_id: &str, song_id: &str) -> Result<()> {
+        let _data: serde_json::Value = self.get_json(
+            "updatePlaylist.view",
+            &[("playlistId", playlist_id), ("songIdToAdd", song_id)],
+        )?;
+        Ok(())
+    }
+
     /// Fetch starred (liked) songs, albums, and artists.
     pub fn get_starred(&self) -> Result<(Vec<SubsonicSong>, Vec<SubsonicAlbum>, Vec<SubsonicArtist>)> {
         let data: Starred2Data = self.get_json("getStarred2.view", &[])?;
