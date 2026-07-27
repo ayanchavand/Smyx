@@ -35,10 +35,8 @@ use myx::gradient::{self};
 use myx::reactive::derive_theme;
 use myx::theme::{Theme, TOKYONIGHT};
 use myx::config::NavidromeConfig;
-use myx::login_modal::{render_login_modal, LoginField, LoginModalAction, LoginModalState};
-use myx::subsonic::{
-    SubsonicAlbum, SubsonicArtist, SubsonicClient, SubsonicPlaylist, SubsonicSong,
-};
+use myx::login_modal::{render_login_modal, LoginModalAction, LoginModalState};
+use myx::subsonic::SubsonicClient;
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
 const FADE_MS: u64 = 300;
@@ -790,7 +788,7 @@ async fn run_ui(
     let (detail_tx, detail_rx) = flume::unbounded::<(String, String, Vec<LibItem>)>();
     let (menu_tx, menu_rx) = flume::unbounded::<ActionMenu>();
     let (astatus_tx, astatus_rx) = flume::unbounded::<String>();
-    let (pstate_tx, pstate_rx) = flume::unbounded::<PlaybackState>();
+    let (_pstate_tx, pstate_rx) = flume::unbounded::<PlaybackState>();
     let (radio_tx, radio_rx) = flume::unbounded::<Result<Radio, String>>();
     let (libdone_tx, libdone_rx) = flume::unbounded::<bool>();
     let (login_tx, login_rx) = flume::unbounded::<Result<(SubsonicClient, NavidromeConfig), String>>();
@@ -1213,12 +1211,12 @@ fn handle_key(
     app: &mut App,
     key: KeyEvent,
     lib_tx: &flume::Sender<(Section, Vec<LibItem>)>,
-    queue_tx: &flume::Sender<Vec<(String, String)>>,
+    _queue_tx: &flume::Sender<Vec<(String, String)>>,
     search_tx: &flume::Sender<Vec<LibItem>>,
     detail_tx: &flume::Sender<(String, String, Vec<LibItem>)>,
-    menu_tx: &flume::Sender<ActionMenu>,
+    _menu_tx: &flume::Sender<ActionMenu>,
     astatus_tx: &flume::Sender<String>,
-    radio_tx: &flume::Sender<Result<Radio, String>>,
+    _radio_tx: &flume::Sender<Result<Radio, String>>,
     libdone_tx: &flume::Sender<bool>,
     login_tx: &flume::Sender<Result<(SubsonicClient, NavidromeConfig), String>>,
 ) -> bool {
