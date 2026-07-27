@@ -7,15 +7,20 @@
 use std::path::PathBuf;
 
 pub mod anim;
+pub mod app;
 pub mod color;
 pub mod components;
 pub mod config;
 pub mod cover;
+pub mod events;
 pub mod gradient;
 pub mod login_modal;
+pub mod models;
 pub mod reactive;
 pub mod subsonic;
+pub mod tasks;
 pub mod theme;
+pub mod ui;
 
 #[cfg(feature = "streaming")]
 pub mod audio;
