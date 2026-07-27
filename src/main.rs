@@ -1,9 +1,8 @@
-//! myx — the fully-wired terminal Spotify player.
+//! myx — a lean, beautiful terminal Navidrome / OpenSubsonic player.
 //!
-//! librespot streaming engine + Web API (your own client id) + album-art-reactive
-//! theming with cross-fades + live FFT visualizer, in noodle's visual language.
+//! rodio audio streaming + album-art-reactive theming with cross-fades + live FFT visualizer.
 //! Multi-section library (playlists / liked / albums / artists), shuffle, repeat,
-//! and a live queue view.
+//! synced lyrics, and a live queue view.
 
 use std::io::{self, Stdout};
 use std::sync::{Arc, Mutex};
@@ -153,17 +152,7 @@ impl LibItem {
             order: 0,
         }
     }
-    fn play(name: String, uri: String) -> Self {
-        Self {
-            name,
-            subtitle: String::new(),
-            uri,
-            is_track: false,
-            is_header: false,
-            is_play: true,
-            order: 0,
-        }
-    }
+
     fn header(name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -218,13 +207,13 @@ fn sort_list(items: &mut [LibItem], mode: SortMode) {
 
 /// A drill-in detail view (artist / album / playlist contents).
 struct Detail {
-    context_uri: String,
     title: String,
     items: Vec<LibItem>,
     parent_selected: usize,
 }
 
 /// What an action-menu entry does when activated.
+#[allow(dead_code)]
 #[derive(Clone)]
 enum ActionKind {
     ToggleLike {
@@ -283,7 +272,6 @@ struct ActionMenu {
 enum Activated {
     None,
     Open(String, String), // drill into a context (uri, name)
-    Radio(String),        // start this song's radio (seed uri)
 }
 
 #[derive(Default, Clone)]
@@ -444,8 +432,7 @@ struct App {
     details: Vec<Detail>,
     // Context actions menu overlay (opened with `a`).
     actions: Option<ActionMenu>,
-    // A last-played track URI to re-enrich (cover/theme/lyrics) on boot.
-    restore_uri: Option<String>,
+
     // Track URI whose metadata was last requested. Fetches run on separate
     // blocking tasks and can land out of order when skipping quickly, so a
     // reply for any other track is stale and must be dropped.
@@ -457,8 +444,6 @@ struct App {
     art_dirty: u8,
     // Whether real playback has started this session (gates resume-on-play).
     playback_started: bool,
-    // Whether we reclaimed a live server-side session (vs. local fallback).
-    reclaimed: bool,
     // What's playing (context/radio/liked), for faithful resume on reboot.
     source: PlaySource,
     source_name: String,
@@ -735,11 +720,9 @@ async fn main() -> Result<()> {
         view: RightView::NowPlaying,
         details: Vec::new(),
         actions: None,
-        restore_uri: None,
         pending_meta: None,
         art_dirty: 0,
         playback_started: false,
-        reclaimed: false,
         source: saved.source.clone(),
         source_name: saved.source_name.clone(),
         sort: SortMode::Added,
@@ -759,10 +742,7 @@ async fn main() -> Result<()> {
     res
 }
 
-struct Radio {
-    start_position_ms: u32,
-    uris: Vec<String>,
-}
+
 
 async fn run_ui(
     terminal: &mut Term,
@@ -786,10 +766,6 @@ async fn run_ui(
     let (search_tx, search_rx) = flume::unbounded::<Vec<LibItem>>();
     let (lyrics_tx, lyrics_rx) = flume::unbounded::<(Vec<(u32, String)>, bool)>();
     let (detail_tx, detail_rx) = flume::unbounded::<(String, String, Vec<LibItem>)>();
-    let (menu_tx, menu_rx) = flume::unbounded::<ActionMenu>();
-    let (astatus_tx, astatus_rx) = flume::unbounded::<String>();
-    let (_pstate_tx, pstate_rx) = flume::unbounded::<PlaybackState>();
-    let (radio_tx, radio_rx) = flume::unbounded::<Result<Radio, String>>();
     let (libdone_tx, libdone_rx) = flume::unbounded::<bool>();
     let (login_tx, login_rx) = flume::unbounded::<Result<(SubsonicClient, NavidromeConfig), String>>();
     if app.login_modal.is_none() {
@@ -858,33 +834,7 @@ async fn run_ui(
                         app.status = "library failed — press r to reload".to_string();
                     }
                 }
-                // Radio results are drained here (not as a `select!` arm) for the
-                // same reason as the library: under the biased 16ms frame tick a
-                // pure recv arm starves and the station never plays.
-                while let Ok(rad) = radio_rx.try_recv() {
-                    match rad {
-                        Ok(radio) if !radio.uris.is_empty() => {
-                            if let Err(e) = app.engine.play_tracks(radio.uris, None, radio.start_position_ms, false) {
-                                app.status = format!("couldn't play radio: {e:#}");
-                            }
-                            app.playback_started = true;
-                            app.status = "radio started".to_string();
-                            // Grab the freshly-populated station queue shortly after.
-                            let subsonic = app.subsonic.clone();
-                            let tx = queue_tx.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(Duration::from_millis(1500)).await;
-                                spawn_queue_fetch(subsonic, tx);
-                            });
-                        }
-                        Ok(_) => {
-                            app.status = "radio: no tracks returned".to_string();
-                        }
-                        Err(e) => {
-                            app.status = format!("radio failed: {e}");
-                        }
-                    }
-                }
+
 
                 let animating = app.fade.is_some()
                     || app.engine.bands.try_lock().map(|g| g.is_active).unwrap_or(false);
@@ -917,7 +867,7 @@ async fn run_ui(
             ev = in_rx.recv_async() => {
                 match ev {
                     Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                        let quit = handle_key(&mut app, key, &lib_tx, &queue_tx, &search_tx, &detail_tx, &menu_tx, &astatus_tx, &radio_tx, &libdone_tx, &login_tx);
+                        let quit = handle_key(&mut app, key, &lib_tx, &queue_tx, &search_tx, &detail_tx, &libdone_tx, &login_tx);
                         if quit {
                             save_state(&app);
                             break;
@@ -1040,9 +990,6 @@ async fn run_ui(
                                                 &queue_tx,
                                                 &search_tx,
                                                 &detail_tx,
-                                                &menu_tx,
-                                                &astatus_tx,
-                                                &radio_tx,
                                                 &libdone_tx,
                                                 &login_tx,
                                             );
@@ -1084,6 +1031,12 @@ async fn run_ui(
             m = meta_rx.recv_async() => {
                 if let Ok(meta) = m { apply_meta(&mut app, meta, &lyrics_tx); }
             }
+            ly = lyrics_rx.recv_async() => {
+                if let Ok((lines, synced)) = ly {
+                    app.lyrics = lines;
+                    app.lyrics_synced = synced;
+                }
+            }
             q = queue_rx.recv_async() => {
                 // Don't let an empty live queue (e.g. a bare resumed track) wipe
                 // the restored/last-known snapshot.
@@ -1105,74 +1058,20 @@ async fn run_ui(
                     };
                 }
             }
-            ly = lyrics_rx.recv_async() => {
-                if let Ok((lines, synced)) = ly {
-                    app.lyrics = lines;
-                    app.lyrics_synced = synced;
-                }
-            }
             d = detail_rx.recv_async() => {
-                if let Ok((context_uri, title, items)) = d {
-                    app.details.push(Detail { context_uri, title, items, parent_selected: app.selected });
+                if let Ok((_context_uri, title, items)) = d {
+                    app.details.push(Detail { title, items, parent_selected: app.selected });
                     app.selected = app.first_selectable();
                     app.status.clear();
                 }
             }
-            menu = menu_rx.recv_async() => {
-                if let Ok(mut menu) = menu {
-                    // Enrich only an already-open menu (don't reopen a closed one),
-                    // preserving the user's current selection across the swap.
-                    if app.actions.is_some() && !menu.items.is_empty() {
-                        if let Some(open) = app.actions.as_ref() {
-                            menu.selected = open.selected.min(menu.items.len() - 1);
-                        }
-                        app.actions = Some(menu);
-                    }
-                }
-            }
-            st = astatus_rx.recv_async() => {
-                if let Ok(msg) = st { app.status = msg; }
-            }
-            ps = pstate_rx.recv_async() => {
-                if let Ok(state) = ps {
-                    app.reclaimed = true;
-                    app.shuffle = state.shuffle;
-                    app.repeat = state.repeat;
-                    app.volume = state.volume.min(100);
-                    let _ = app.engine.set_volume_u8(app.volume);
-                    app.now = Some(NowPlaying {
-                        uri: format!("spotify:track:{}", state.track_id),
-                        title: String::new(),
-                        artist: String::new(),
-                        album: String::new(),
-                        duration_ms: 0,
-                        position_ms: state.progress_ms,
-                        position_at: Instant::now(),
-                        is_playing: false,
-                        cover: None,
-                    });
-                    let subsonic = app.subsonic.clone();
-                    let tx = meta_tx.clone();
-                    let id = state.track_id.clone();
-                    app.pending_meta = Some(format!("subsonic:track:{id}"));
-                    tokio::task::spawn_blocking(move || { let _ = tx.send(fetch_track_meta(&subsonic, &id)); });
-                    spawn_queue_fetch(app.subsonic.clone(), queue_tx.clone());
-                }
-            }
+
         }
     }
     Ok(())
 }
 
-/// Resume the persisted playback source at the last track/position — the
-/// faithful reboot resume (real context ⇒ real queue continuation).
-fn resume_source(app: &mut App, _radio_tx: &flume::Sender<Result<Radio, String>>) {
-    if let Some(n) = app.now.as_ref() {
-        if let Some(id) = n.uri.strip_prefix("subsonic:track:") {
-            let _ = app.engine.play_track_id(id);
-        }
-    }
-}
+
 
 /// Does this row carry a playable context URI, and under what name?
 ///
@@ -1214,9 +1113,6 @@ fn handle_key(
     _queue_tx: &flume::Sender<Vec<(String, String)>>,
     search_tx: &flume::Sender<Vec<LibItem>>,
     detail_tx: &flume::Sender<(String, String, Vec<LibItem>)>,
-    _menu_tx: &flume::Sender<ActionMenu>,
-    astatus_tx: &flume::Sender<String>,
-    _radio_tx: &flume::Sender<Result<Radio, String>>,
     libdone_tx: &flume::Sender<bool>,
     login_tx: &flume::Sender<Result<(SubsonicClient, NavidromeConfig), String>>,
 ) -> bool {
@@ -1266,7 +1162,7 @@ fn handle_key(
 
     // --- Actions menu captures input while open ---
     if app.actions.is_some() {
-        handle_action_key(app, code, detail_tx, astatus_tx);
+        handle_action_key(app, code, detail_tx);
         return false;
     }
 
@@ -1390,9 +1286,6 @@ fn handle_key(
             Activated::Open(uri, name) => {
                 spawn_detail_fetch(app.subsonic.clone(), uri, name, detail_tx.clone());
             }
-            Activated::Radio(uri) => {
-                app.status = format!("Playing radio for {}", uri);
-            }
             Activated::None => {}
         },
         _ => {}
@@ -1405,7 +1298,6 @@ fn handle_action_key(
     app: &mut App,
     code: KeyCode,
     detail_tx: &flume::Sender<(String, String, Vec<LibItem>)>,
-    astatus_tx: &flume::Sender<String>,
 ) {
     match code {
         KeyCode::Esc | KeyCode::Char('a') => {
@@ -1477,28 +1369,20 @@ fn handle_action_key(
             app.actions = None;
         }
         ActionKind::CopyLink { uri } => {
-            app.status = if copy_to_clipboard(&uri_to_url(&uri)) {
+            app.status = if copy_to_clipboard(&uri) {
                 "link copied".to_string()
             } else {
                 "clipboard unavailable".to_string()
             };
             app.actions = None;
         }
-        other => {
-            spawn_action(app.subsonic.clone(), other, astatus_tx.clone());
+        _other => {
             app.actions = None;
         }
     }
 }
 
-/// Convert a `spotify:kind:id` URI to an open.spotify.com link.
-fn uri_to_url(uri: &str) -> String {
-    let mut p = uri.split(':');
-    p.next();
-    let kind = p.next().unwrap_or("");
-    let id = p.next().unwrap_or("");
-    format!("https://open.spotify.com/{kind}/{id}")
-}
+
 
 /// Copy text to the system clipboard via whatever tool is available.
 fn copy_to_clipboard(text: &str) -> bool {
@@ -1528,362 +1412,7 @@ fn copy_to_clipboard(text: &str) -> bool {
     false
 }
 
-fn spawn_action_menu(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _item: LibItem, _tx: flume::Sender<ActionMenu>) {}
 
-/// Build the context menu for `item`, checking saved/following state and
-/// resolving related artist/album links up front.
-fn build_action_menu(token: Option<&str>, item: &LibItem) -> ActionMenu {
-    let mut parts = item.uri.split(':');
-    parts.next();
-    let kind = parts.next().unwrap_or("");
-    let id = parts.next().unwrap_or("").to_string();
-    let uri = item.uri.clone();
-    // Only build the blocking client for the enriched (Some token) path; the
-    // instant (None) path runs on the async loop where dropping reqwest's inner
-    // runtime would panic.
-    let client = token.map(|_| http_client());
-    let mut items = Vec::new();
-
-    match kind {
-        "track" => {
-            let saved = token
-                .map(|t| {
-                    api_contains(
-                        t,
-                        &format!("https://api.spotify.com/v1/me/tracks/contains?ids={id}"),
-                    )
-                })
-                .unwrap_or(false);
-            items.push(ActionItem {
-                label: if saved {
-                    "♥  Remove from Liked".into()
-                } else {
-                    "♡  Add to Liked".into()
-                },
-                kind: ActionKind::ToggleLike {
-                    id: id.clone(),
-                    saved,
-                },
-            });
-            items.push(ActionItem {
-                label: "＋  Add to Queue".into(),
-                kind: ActionKind::Queue { uri: uri.clone() },
-            });
-            items.push(ActionItem {
-                label: "≡  Add to Playlist…".into(),
-                kind: ActionKind::AddToPlaylistMenu {
-                    track_uri: uri.clone(),
-                },
-            });
-            // Resolve the track's artist + album for "Go to" navigation.
-            if let Some(v) = client.as_ref().zip(token).and_then(|(c, t)| {
-                get_json(c, &format!("https://api.spotify.com/v1/tracks/{id}"), t)
-            }) {
-                if let (Some(au), Some(an)) = (
-                    v["artists"][0]["uri"].as_str(),
-                    v["artists"][0]["name"].as_str(),
-                ) {
-                    items.push(ActionItem {
-                        label: format!("→  Go to Artist ({an})"),
-                        kind: ActionKind::Open {
-                            uri: au.to_string(),
-                            name: an.to_string(),
-                        },
-                    });
-                }
-                if let (Some(lu), Some(ln)) =
-                    (v["album"]["uri"].as_str(), v["album"]["name"].as_str())
-                {
-                    items.push(ActionItem {
-                        label: "→  Go to Album".into(),
-                        kind: ActionKind::Open {
-                            uri: lu.to_string(),
-                            name: ln.to_string(),
-                        },
-                    });
-                }
-            }
-            items.push(ActionItem {
-                label: "⧉  Copy Link".into(),
-                kind: ActionKind::CopyLink { uri },
-            });
-        }
-        "artist" => {
-            let following = token
-                .map(|t| {
-                    api_contains(
-                        t,
-                        &format!(
-                            "https://api.spotify.com/v1/me/following/contains?type=artist&ids={id}"
-                        ),
-                    )
-                })
-                .unwrap_or(false);
-            items.push(ActionItem {
-                label: if following {
-                    "Unfollow".into()
-                } else {
-                    "Follow".into()
-                },
-                kind: ActionKind::ToggleFollowArtist { id, following },
-            });
-            items.push(ActionItem {
-                label: "▶︎  Play".into(),
-                kind: ActionKind::Play {
-                    uri: uri.clone(),
-                    name: item.name.clone(),
-                },
-            });
-            items.push(ActionItem {
-                label: "→  Open".into(),
-                kind: ActionKind::Open {
-                    uri: uri.clone(),
-                    name: item.name.clone(),
-                },
-            });
-            items.push(ActionItem {
-                label: "⧉  Copy Link".into(),
-                kind: ActionKind::CopyLink { uri },
-            });
-        }
-        "album" => {
-            let saved = token
-                .map(|t| {
-                    api_contains(
-                        t,
-                        &format!("https://api.spotify.com/v1/me/albums/contains?ids={id}"),
-                    )
-                })
-                .unwrap_or(false);
-            items.push(ActionItem {
-                label: if saved {
-                    "Remove from Library".into()
-                } else {
-                    "Save Album".into()
-                },
-                kind: ActionKind::ToggleSaveAlbum {
-                    id: id.clone(),
-                    saved,
-                },
-            });
-            items.push(ActionItem {
-                label: "▶︎  Play".into(),
-                kind: ActionKind::Play {
-                    uri: uri.clone(),
-                    name: item.name.clone(),
-                },
-            });
-            items.push(ActionItem {
-                label: "→  Open Album".into(),
-                kind: ActionKind::Open {
-                    uri: uri.clone(),
-                    name: item.name.clone(),
-                },
-            });
-            if let Some(v) = client.as_ref().zip(token).and_then(|(c, t)| {
-                get_json(c, &format!("https://api.spotify.com/v1/albums/{id}"), t)
-            }) {
-                if let (Some(au), Some(an)) = (
-                    v["artists"][0]["uri"].as_str(),
-                    v["artists"][0]["name"].as_str(),
-                ) {
-                    items.push(ActionItem {
-                        label: format!("→  Go to Artist ({an})"),
-                        kind: ActionKind::Open {
-                            uri: au.to_string(),
-                            name: an.to_string(),
-                        },
-                    });
-                }
-            }
-            items.push(ActionItem {
-                label: "⧉  Copy Link".into(),
-                kind: ActionKind::CopyLink { uri },
-            });
-        }
-        "playlist" => {
-            items.push(ActionItem {
-                label: "＋  Add to Your Library".into(),
-                kind: ActionKind::FollowPlaylist { id },
-            });
-            items.push(ActionItem {
-                label: "▶︎  Play".into(),
-                kind: ActionKind::Play {
-                    uri: uri.clone(),
-                    name: item.name.clone(),
-                },
-            });
-            items.push(ActionItem {
-                label: "→  Open".into(),
-                kind: ActionKind::Open {
-                    uri: uri.clone(),
-                    name: item.name.clone(),
-                },
-            });
-            items.push(ActionItem {
-                label: "⧉  Copy Link".into(),
-                kind: ActionKind::CopyLink { uri },
-            });
-        }
-        _ => {}
-    }
-    ActionMenu {
-        title: item.name.clone(),
-        items,
-        selected: 0,
-    }
-}
-
-fn spawn_action(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _kind: ActionKind, _tx: flume::Sender<String>) {}
-
-fn run_action(token: &str, kind: ActionKind) -> String {
-    let client = http_client();
-    match kind {
-        ActionKind::ToggleLike { id, saved } => {
-            let m = if saved { "DELETE" } else { "PUT" };
-            match api_modify(
-                &client,
-                token,
-                m,
-                &format!("https://api.spotify.com/v1/me/tracks?ids={id}"),
-            ) {
-                Ok(()) => {
-                    if saved {
-                        "removed from Liked".into()
-                    } else {
-                        "added to Liked ♥ (press r to refresh)".into()
-                    }
-                }
-                Err(e) => format!("like failed: {e}"),
-            }
-        }
-        ActionKind::Queue { uri } => {
-            match api_modify(
-                &client,
-                token,
-                "POST",
-                &format!(
-                    "https://api.spotify.com/v1/me/player/queue?uri={}",
-                    urlencode(&uri)
-                ),
-            ) {
-                Ok(()) => "added to queue".into(),
-                Err(e) => format!("queue failed: {e} (start playback first)"),
-            }
-        }
-        ActionKind::AddToPlaylist {
-            playlist_id,
-            track_uri,
-        } => {
-            match api_modify(
-                &client,
-                token,
-                "POST",
-                &format!(
-                    "https://api.spotify.com/v1/playlists/{playlist_id}/tracks?uris={}",
-                    urlencode(&track_uri)
-                ),
-            ) {
-                Ok(()) => "added to playlist".into(),
-                Err(e) => format!("add failed: {e}"),
-            }
-        }
-        ActionKind::ToggleFollowArtist { id, following } => {
-            let m = if following { "DELETE" } else { "PUT" };
-            match api_modify(
-                &client,
-                token,
-                m,
-                &format!("https://api.spotify.com/v1/me/following?type=artist&ids={id}"),
-            ) {
-                Ok(()) => {
-                    if following {
-                        "unfollowed".into()
-                    } else {
-                        "following".into()
-                    }
-                }
-                Err(e) => format!("follow failed: {e}"),
-            }
-        }
-        ActionKind::ToggleSaveAlbum { id, saved } => {
-            let m = if saved { "DELETE" } else { "PUT" };
-            match api_modify(
-                &client,
-                token,
-                m,
-                &format!("https://api.spotify.com/v1/me/albums?ids={id}"),
-            ) {
-                Ok(()) => {
-                    if saved {
-                        "removed album".into()
-                    } else {
-                        "saved album".into()
-                    }
-                }
-                Err(e) => format!("album action failed: {e}"),
-            }
-        }
-        ActionKind::FollowPlaylist { id } => {
-            match api_modify(
-                &client,
-                token,
-                "PUT",
-                &format!("https://api.spotify.com/v1/playlists/{id}/followers"),
-            ) {
-                Ok(()) => "added to library".into(),
-                Err(e) => format!("add failed: {e}"),
-            }
-        }
-        _ => String::new(),
-    }
-}
-
-/// Returns Ok on 2xx, else a short reason (HTTP status / network) so the UI can
-/// say WHY instead of a generic "action failed". Retries once on 429.
-fn api_modify(
-    client: &reqwest::blocking::Client,
-    token: &str,
-    method: &str,
-    url: &str,
-) -> Result<(), String> {
-    for attempt in 0..2 {
-        let req = match method {
-            "PUT" => client.put(url),
-            "DELETE" => client.delete(url),
-            _ => client.post(url),
-        };
-        match req.bearer_auth(token).header("Content-Length", "0").send() {
-            Ok(r) if r.status().is_success() => return Ok(()),
-            Ok(r) if r.status().as_u16() == 429 && attempt == 0 => {
-                let wait = r
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(1)
-                    .min(5);
-                std::thread::sleep(Duration::from_secs(wait));
-            }
-            Ok(r) => return Err(format!("HTTP {}", r.status().as_u16())),
-            Err(e) => {
-                return Err(if e.is_timeout() {
-                    "timeout".into()
-                } else {
-                    "network error".into()
-                })
-            }
-        }
-    }
-    Err("rate limited".into())
-}
-
-fn api_contains(token: &str, url: &str) -> bool {
-    let client = http_client();
-    get_json(&client, url, token)
-        .and_then(|v| v.get(0).and_then(|b| b.as_bool()))
-        .unwrap_or(false)
-}
 
 /// Snapshot the current session to disk (volume, last track, position, queue).
 fn save_state(app: &App) {
@@ -2101,50 +1630,7 @@ fn liblog(msg: impl AsRef<str>) {
     }
 }
 
-fn token_of(_subsonic: &Arc<Mutex<Option<SubsonicClient>>>) -> Option<String> {
-    None
-}
 
-fn spawn_queue_fetch(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _tx: flume::Sender<Vec<(String, String)>>) {}
-
-fn fetch_track_meta(_subsonic: &Arc<Mutex<Option<SubsonicClient>>>, track_id: &str) -> TrackMeta {
-    TrackMeta {
-        uri: format!("subsonic:track:{track_id}"),
-        title: String::new(),
-        artist: String::new(),
-        album: String::new(),
-        duration_ms: 0,
-        image: None,
-        theme: None,
-    }
-}
-
-/// GET a JSON endpoint, retrying on 429 (respecting Retry-After).
-fn get_json(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    token: &str,
-) -> Option<serde_json::Value> {
-    for _ in 0..5 {
-        let resp = client.get(url).bearer_auth(token).send().ok()?;
-        if resp.status().as_u16() == 429 {
-            let wait = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(3)
-                .min(30);
-            std::thread::sleep(Duration::from_secs(wait + 1));
-            continue;
-        }
-        if !resp.status().is_success() {
-            return None;
-        }
-        return resp.json::<serde_json::Value>().ok();
-    }
-    None
-}
 
 /// Fetch the library incrementally: fast sections first, Liked streamed in
 /// chunks so the UI is usable within ~1s instead of waiting for everything.
@@ -2234,82 +1720,7 @@ fn spawn_library_fetch(
         .expect("spawn library worker");
 }
 
-/// One `/playlists/{id}/items` entry -> `LibItem`.
-///
-/// The payload nests the track under `item`; the older `/tracks` endpoint used
-/// `track`. Both are accepted so this keeps working whichever shape is served.
-///
-/// `None` skips the row (`fetch_all_pages` filters rather than aborting), which
-/// is what we want for entries with no playable track: `null` for items removed
-/// from the catalogue, and region-locked or malformed rows.
-fn parse_playlist_track(it: &serde_json::Value) -> Option<LibItem> {
-    let t = if it["item"].is_object() {
-        &it["item"]
-    } else {
-        &it["track"]
-    };
-    Some(LibItem::track(
-        t["name"].as_str()?.to_string(),
-        t["artists"][0]["name"].as_str().unwrap_or("").to_string(),
-        t["uri"].as_str()?.to_string(),
-    ))
-}
 
-/// Track count from a playlist object. Spotify renamed the field `tracks` ->
-/// `items` alongside the `/tracks` -> `/items` endpoint move; read the new name
-/// first and fall back so both shapes work.
-fn playlist_total(p: &serde_json::Value) -> Option<u64> {
-    p["items"]["total"]
-        .as_u64()
-        .or_else(|| p["tracks"]["total"].as_u64())
-}
-
-/// Playlist row subtitle: `"142 · owner"`, or just the owner when the API omits
-/// the count.
-///
-/// Count first, deliberately: the row renderer truncates the subtitle tail-first
-/// in a narrow pane, and the count is both short and the more informative half —
-/// the owner is frequently the same name on every row.
-fn playlist_subtitle(owner: &str, total: Option<u64>) -> String {
-    match total {
-        Some(n) if owner.is_empty() => n.to_string(),
-        Some(n) => format!("{n} · {owner}"),
-        None => owner.to_string(),
-    }
-}
-
-fn fetch_all_pages(
-    client: &reqwest::blocking::Client,
-    first_url: &str,
-    token: &str,
-    nested: Option<&str>,
-    max_pages: usize,
-    parse: impl Fn(&serde_json::Value) -> Option<LibItem>,
-) -> Vec<LibItem> {
-    let mut out = Vec::new();
-    let mut url = Some(first_url.to_string());
-    let mut pages = 0;
-    while let Some(u) = url.take() {
-        if pages >= max_pages {
-            break;
-        }
-        let Some(v) = get_json(client, &u, token) else {
-            break;
-        };
-        let node = match nested {
-            Some(k) => &v[k],
-            None => &v,
-        };
-        for it in node["items"].as_array().into_iter().flatten() {
-            if let Some(li) = parse(it) {
-                out.push(li);
-            }
-        }
-        url = node["next"].as_str().map(String::from);
-        pages += 1;
-    }
-    out
-}
 
 
 
@@ -2363,83 +1774,7 @@ fn spawn_search(
         .ok();
 }
 
-fn search_blocking(token: &str, query: &str) -> Vec<LibItem> {
-    let client = http_client();
-    let url = format!(
-        "https://api.spotify.com/v1/search?q={}&type=track,artist,album,playlist&limit=6",
-        urlencode(query)
-    );
-    let Some(v) = get_json(&client, &url, token) else {
-        return Vec::new();
-    };
 
-    let mut out = Vec::new();
-
-    let songs: Vec<LibItem> = v["tracks"]["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| {
-            Some(LibItem::track(
-                t["name"].as_str()?.to_string(),
-                t["artists"][0]["name"].as_str().unwrap_or("").to_string(),
-                t["uri"].as_str()?.to_string(),
-            ))
-        })
-        .collect();
-    let artists: Vec<LibItem> = v["artists"]["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|a| {
-            Some(LibItem::ctx(
-                a["name"].as_str()?.to_string(),
-                String::new(),
-                a["uri"].as_str()?.to_string(),
-            ))
-        })
-        .collect();
-    let albums: Vec<LibItem> = v["albums"]["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|al| {
-            Some(LibItem::ctx(
-                al["name"].as_str()?.to_string(),
-                al["artists"][0]["name"].as_str().unwrap_or("").to_string(),
-                al["uri"].as_str()?.to_string(),
-            ))
-        })
-        .collect();
-    let playlists: Vec<LibItem> = v["playlists"]["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|p| {
-            Some(LibItem::ctx(
-                p["name"].as_str()?.to_string(),
-                playlist_subtitle(
-                    p["owner"]["display_name"].as_str().unwrap_or(""),
-                    playlist_total(p),
-                ),
-                p["uri"].as_str()?.to_string(),
-            ))
-        })
-        .collect();
-
-    for (title, group) in [
-        ("Songs", songs),
-        ("Artists", artists),
-        ("Albums", albums),
-        ("Playlists", playlists),
-    ] {
-        if !group.is_empty() {
-            out.push(LibItem::header(title));
-            out.extend(group);
-        }
-    }
-    out
-}
 
 // --- Lyrics (lrclib) ---
 
@@ -2449,7 +1784,6 @@ fn fetch_lyrics_blocking(
     album: &str,
     duration_ms: u32,
 ) -> (Vec<(u32, String)>, bool) {
-    let client = http_client();
     let url = format!(
         "https://lrclib.net/api/get?artist_name={}&track_name={}&album_name={}&duration={}",
         urlencode(artist),
@@ -2457,17 +1791,17 @@ fn fetch_lyrics_blocking(
         urlencode(album),
         duration_ms / 1000
     );
-    let Ok(resp) = client
-        .get(&url)
-        .header("User-Agent", "myx (terminal spotify player)")
-        .send()
+    let Ok(res) = ureq::get(&url)
+        .header("User-Agent", "myx (terminal player)")
+        .call()
     else {
         return (Vec::new(), false);
     };
-    if !resp.status().is_success() {
+    let status = res.status().as_u16();
+    if status < 200 || status >= 300 {
         return (Vec::new(), false);
     }
-    let Ok(v) = resp.json::<serde_json::Value>() else {
+    let Ok(v) = res.into_body().read_json::<serde_json::Value>() else {
         return (Vec::new(), false);
     };
 
@@ -2579,172 +1913,7 @@ fn spawn_detail_fetch(
         .ok();
 }
 
-fn fetch_detail_blocking(token: &str, uri: &str, name: &str) -> (String, Vec<LibItem>) {
-    let client = http_client();
-    let mut parts = uri.split(':');
-    parts.next(); // "spotify"
-    let kind = parts.next().unwrap_or("");
-    let id = parts.next().unwrap_or("");
 
-    // "Play all" row first.
-    let mut items = vec![LibItem::play(format!("▶︎ Play {name}"), uri.to_string())];
-
-    match kind {
-        "artist" => {
-            // Popular tracks (already ranked by popularity).
-            if let Some(v) = get_json(
-                &client,
-                &format!("https://api.spotify.com/v1/artists/{id}/top-tracks?market=from_token"),
-                token,
-            ) {
-                let tracks: Vec<LibItem> = v["tracks"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|t| {
-                        Some(LibItem::track(
-                            t["name"].as_str()?.to_string(),
-                            t["artists"][0]["name"].as_str().unwrap_or("").to_string(),
-                            t["uri"].as_str()?.to_string(),
-                        ))
-                    })
-                    .collect();
-                if !tracks.is_empty() {
-                    items.push(LibItem::header("Popular"));
-                    items.extend(tracks);
-                }
-            }
-            // Albums + singles, deduped by name, newest first, year in subtitle.
-            if let Some(v) = get_json(
-                &client,
-                &format!("https://api.spotify.com/v1/artists/{id}/albums?include_groups=album,single&limit=50"),
-                token,
-            ) {
-                let mut seen = std::collections::HashSet::new();
-                let mut albums: Vec<(String, LibItem)> = Vec::new();
-                for a in v["items"].as_array().into_iter().flatten() {
-                    let (Some(aname), Some(auri)) = (a["name"].as_str(), a["uri"].as_str()) else {
-                        continue;
-                    };
-                    if !seen.insert(aname.to_lowercase()) {
-                        continue;
-                    }
-                    let date = a["release_date"].as_str().unwrap_or("").to_string();
-                    let year = date.split('-').next().unwrap_or("").to_string();
-                    albums.push((date, LibItem::ctx(aname.to_string(), year, auri.to_string())));
-                }
-                albums.sort_by(|x, y| y.0.cmp(&x.0)); // newest first
-                if !albums.is_empty() {
-                    items.push(LibItem::header("Albums"));
-                    items.extend(albums.into_iter().map(|(_, it)| it));
-                }
-            }
-        }
-        "album" => {
-            if let Some(v) = get_json(
-                &client,
-                &format!("https://api.spotify.com/v1/albums/{id}/tracks?limit=50"),
-                token,
-            ) {
-                for t in v["items"].as_array().into_iter().flatten() {
-                    if let (Some(n), Some(u)) = (t["name"].as_str(), t["uri"].as_str()) {
-                        items.push(LibItem::track(
-                            n.to_string(),
-                            t["artists"][0]["name"].as_str().unwrap_or("").to_string(),
-                            u.to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-        "playlist" => {
-            // Follow `next` instead of taking only the first page: playlists
-            // routinely exceed the 100-item page size, and the drill-in list
-            // (plus "play from this track") was silently truncated.
-            let before = items.len();
-            items.extend(fetch_all_pages(
-                &client,
-                &format!("https://api.spotify.com/v1/playlists/{id}/items?limit=100"),
-                token,
-                None, // items[] is top-level on this endpoint
-                10,   // 1,000 tracks, matching the other sections' ceiling
-                parse_playlist_track,
-            ));
-            if items.len() == before {
-                // Some third-party playlists 403 even on /items. `fetch_all_pages`
-                // has no error channel, so an empty result is indistinguishable
-                // from an empty playlist — say both rather than showing a blank
-                // pane with no explanation.
-                items.push(LibItem::header("no tracks — empty or restricted"));
-            }
-        }
-        _ => {}
-    }
-
-    (name.to_string(), items)
-}
-
-// --- Live playback state (server-side) ---
-
-/// The current playback as Spotify remembers it (across devices).
-struct PlaybackState {
-    track_id: String,
-    progress_ms: u32,
-    shuffle: bool,
-    repeat: bool,
-    volume: u8,
-}
-
-fn fetch_playback_state(token: &str) -> Option<PlaybackState> {
-    let client = http_client();
-    let resp = client
-        .get("https://api.spotify.com/v1/me/player")
-        .bearer_auth(token)
-        .send()
-        .ok()?;
-    if !resp.status().is_success() {
-        return None; // 204 = nothing playing recently
-    }
-    let v: serde_json::Value = resp.json().ok()?;
-    let track_id = v["item"]["id"].as_str()?.to_string();
-    Some(PlaybackState {
-        track_id,
-        progress_ms: v["progress_ms"].as_u64().unwrap_or(0) as u32,
-        shuffle: v["shuffle_state"].as_bool().unwrap_or(false),
-        repeat: v["repeat_state"]
-            .as_str()
-            .map(|r| r != "off")
-            .unwrap_or(false),
-        volume: v["device"]["volume_percent"].as_u64().unwrap_or(50) as u8,
-    })
-}
-
-/// Transfer the current server-side playback onto the myx device (with its full
-/// context + queue + position). `play=false` transfers paused.
-fn transfer_playback(token: &str, device_id: &str, play: bool) -> bool {
-    let client = http_client();
-    client
-        .put("https://api.spotify.com/v1/me/player")
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "device_ids": [device_id], "play": play }))
-        .send()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
-}
-
-/// Boot restore: read the live playback state, transfer it onto myx (retrying
-/// while the device registers), and hand the state back to the UI.
-fn spawn_restore(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _device_id: String, _tx: flume::Sender<PlaybackState>) {}
-
-// --- Live playback state (server-side) end ---
-
-fn track_id_from_uri(uri: &str) -> Option<String> {
-    let mut parts = uri.split(':');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some("spotify"), Some("track"), Some(id)) => Some(id.to_string()),
-        _ => None,
-    }
-}
 
 // ------------------------------------------------------------------ render
 
@@ -3240,10 +2409,7 @@ fn render_volume(f: &mut Frame, app: &mut App, theme: Theme, area: Rect) {
     });
 }
 
-/// Convert a 0..=100 percentage to librespot's 0..=65535 volume range.
-fn vol_u16(pct: u8) -> u16 {
-    (pct as u32 * 65535 / 100) as u16
-}
+
 
 fn render_lyrics(f: &mut Frame, app: &App, theme: Theme, area: Rect) {
     let inner = area.inner(Margin::new(2, 0));
@@ -3614,14 +2780,7 @@ fn fmt_ms(ms: u32) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
-/// A blocking HTTP client with a timeout so a stalled network can't wedge a
-/// worker thread forever (audit H2).
-fn http_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap_or_default()
-}
+
 
 // ------------------------------------------------------------------ terminal
 

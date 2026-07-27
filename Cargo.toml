@@ -2,13 +2,13 @@
 name = "myx"
 version = "0.2.5"
 edition = "2021"
-description = "A lean, beautiful terminal Spotify player"
+description = "A lean, beautiful terminal Navidrome / OpenSubsonic player"
 authors = ["Haseeb Khalid"]
 license = "MIT"
 repository = "https://github.com/HaseebKhalid1507/Myx"
 homepage = "https://github.com/HaseebKhalid1507/Myx"
 readme = "README.md"
-keywords = ["spotify", "tui", "music", "player", "ratatui"]
+keywords = ["navidrome", "subsonic", "tui", "music", "player", "ratatui"]
 categories = ["command-line-utilities", "multimedia::audio"]
 default-run = "myx"
 
@@ -20,49 +20,26 @@ image = "0.25"
 color-thief = "0.2"
 
 # --- streaming backend (on by default; the single `myx` binary needs it) ---
-librespot-core = { version = "0.8.0", optional = true }
-librespot-connect = { version = "0.8.0", optional = true }
-librespot-playback = { version = "0.8.0", optional = true, default-features = false, features = ["native-tls", "rodio-backend"] }
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 flume = { version = "0.12", optional = true }
 rustfft = { version = "6", optional = true }
-reqwest = { version = "0.13", optional = true, default-features = false, features = ["blocking", "json", "native-tls"] }
-rustls = { version = "0.23", optional = true, default-features = false, features = ["ring"] }
-base64 = { version = "0.22", optional = true }
-sha2 = { version = "0.10", optional = true }
-rand = { version = "0.9", optional = true }
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
 anyhow = { version = "1", optional = true }
-open = { version = "5", optional = true }
 fs2 = { version = "0.4", optional = true }
 toml = { version = "0.8", optional = true }
 rodio = { version = "0.21", optional = true }
 ureq = { version = "3", optional = true, features = ["json"] }
 
-# Pins librespot-core's transitive `vergen` build-dep to a working version so a
-# fresh `cargo install` (which ignores Cargo.lock) resolves correctly.
-[build-dependencies]
-vergen = "=9.0.6"
-
 [features]
 default = ["streaming"]
 streaming = [
-    "dep:librespot-core",
-    "dep:librespot-connect",
-    "dep:librespot-playback",
     "dep:tokio",
     "dep:flume",
     "dep:rustfft",
-    "dep:reqwest",
-    "dep:rustls",
-    "dep:base64",
-    "dep:sha2",
-    "dep:rand",
     "dep:serde",
     "dep:serde_json",
     "dep:anyhow",
-    "dep:open",
     "dep:fs2",
     "dep:toml",
     "dep:rodio",
@@ -74,15 +51,10 @@ streaming = [
 name = "myx"
 path = "src/main.rs"
 
-# Dev tools, kept as examples (cargo run --example theme_demo / probe).
+# Dev tools, kept as examples (cargo run --example theme_demo).
 [[example]]
 name = "theme_demo"
 path = "examples/theme_demo.rs"
-
-[[example]]
-name = "probe"
-path = "examples/probe.rs"
-required-features = ["streaming"]
 
 [profile.release]
 lto = true
@@ -95,11 +67,7 @@ panic = "abort"
 inherits = "release"
 lto = "thin"
 
-# Debian packaging (audit H7): the binary links libasound2 (librespot ALSA) and
-# libssl3 (native-tls), so the .deb must declare them or `dpkg -i` installs a
-# binary that fails to start with missing shared libraries.
 [package.metadata.deb]
-depends = "libasound2, libssl3"
 section = "sound"
 priority = "optional"
 assets = [

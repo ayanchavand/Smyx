@@ -1,9 +1,8 @@
-//! myx — a lean, beautiful terminal Spotify player.
+//! myx — a lean, beautiful terminal Navidrome / OpenSubsonic player.
 //!
 //! FE: the design-token system (noodle's visual language) ported to ratatui,
 //! plus album-art-reactive theming with cross-fades.
-//! Backend (`streaming` feature): a lean librespot engine — Connect device + tee'd
-//! FFT visualizer + real track-change events.
+//! Backend (`streaming` feature): rodio audio streaming + FFT visualizer.
 
 use std::path::PathBuf;
 
@@ -22,8 +21,6 @@ pub mod theme;
 pub mod audio;
 #[cfg(feature = "streaming")]
 pub mod engine;
-#[cfg(feature = "streaming")]
-pub mod webapi;
 
 /// Cross-platform home directory. Uses `HOME` on Unix, `USERPROFILE` on Windows.
 pub fn home_dir() -> Option<PathBuf> {

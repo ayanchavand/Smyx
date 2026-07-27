@@ -4,8 +4,6 @@
 //! controls volume/playback state, taps PCM audio into `VisBands` for the FFT visualizer,
 //! and dispatches `EngineEvent` updates to the app event loop.
 
-pub mod auth;
-
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
