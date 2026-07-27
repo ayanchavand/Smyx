@@ -2,4 +2,4 @@
 
 pub mod visualizer;
 
-pub use visualizer::{VisBands, VisualizationSink, NUM_BANDS};
+pub use visualizer::{FftProcessor, FftSource, VisBands, NUM_BANDS};

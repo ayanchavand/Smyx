@@ -1,21 +1,12 @@
-//! Real-time FFT frequency-band visualizer.
+//! Real-time FFT frequency-band visualizer for audio playback.
 //!
-//! Vendored and adapted from aome510/spotify-player (`ui/streaming.rs`, MIT,
-//! © 2021 Thang Pham). Decoupled here from that app's global state so it writes
-//! to a plain `Arc<Mutex<VisBands>>` that myx owns.
-//!
-//! The design is a **tee'd audio sink**: it forwards every packet unchanged to
-//! the real backend (so playback is never affected) while computing a windowed
-//! FFT on a copy. The hot path is allocation-free and the UI reads the bands via
-//! `try_lock`, so the audio thread never stalls waiting on a render.
+//! Computes windowed FFTs on audio PCM samples as they are streamed to the
+//! playback device, updating an `Arc<Mutex<VisBands>>` for real-time TUI rendering.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use librespot_playback::audio_backend::{Sink, SinkResult};
-use librespot_playback::convert::Converter;
-use librespot_playback::decoder::AudioPacket;
 use rustfft::{num_complex::Complex, FftPlanner};
 
 const FFT_SIZE: usize = 1024;
@@ -28,7 +19,7 @@ const DECAY_FACTOR: f32 = 0.985;
 /// Slower decay for the normalization envelope so quiet passages read quiet.
 const DECAY_FACTOR_PEAK: f32 = 0.9985;
 
-/// Shared frequency-band state written by the audio sink, read by the renderer.
+/// Shared frequency-band state written by the audio engine, read by the UI renderer.
 pub struct VisBands {
     pub values: [f32; NUM_BANDS],
     pub updated_at: Instant,
@@ -57,9 +48,8 @@ impl Default for VisBands {
     }
 }
 
-/// A tee'd sink: forwards audio to `inner` and computes FFT bands on the side.
-pub struct VisualizationSink {
-    inner: Box<dyn Sink>,
+/// Standalone FFT processor for PCM audio streams.
+pub struct FftProcessor {
     sample_buf: VecDeque<f32>,
     bands: Arc<Mutex<VisBands>>,
     fft: Arc<dyn rustfft::Fft<f32>>,
@@ -70,10 +60,11 @@ pub struct VisualizationSink {
     band_ranges: Vec<(usize, usize)>,
     new_bands: [f32; NUM_BANDS],
     smooth_scratch: [f32; NUM_BANDS],
+    channel_accumulator: Vec<f32>,
 }
 
-impl VisualizationSink {
-    pub fn new(inner: Box<dyn Sink>, bands: Arc<Mutex<VisBands>>, sample_rate: f32) -> Self {
+impl FftProcessor {
+    pub fn new(bands: Arc<Mutex<VisBands>>, sample_rate: f32) -> Self {
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(FFT_SIZE);
         let hann_window: Vec<f32> = (0..FFT_SIZE)
@@ -83,7 +74,6 @@ impl VisualizationSink {
             .collect();
         let band_ranges = precompute_band_ranges(FFT_SIZE / 2, NUM_BANDS);
         Self {
-            inner,
             sample_buf: VecDeque::with_capacity(FFT_SIZE * 2),
             bands,
             fft,
@@ -94,94 +84,139 @@ impl VisualizationSink {
             band_ranges,
             new_bands: [0.0; NUM_BANDS],
             smooth_scratch: [0.0; NUM_BANDS],
+            channel_accumulator: Vec::with_capacity(2),
+        }
+    }
+
+    pub fn process_sample(&mut self, sample: f32, channels: u16) {
+        let num_ch = channels.max(1) as usize;
+        self.channel_accumulator.push(sample);
+        if self.channel_accumulator.len() >= num_ch {
+            let mono_sample: f32 = self.channel_accumulator.iter().sum::<f32>() / (num_ch as f32);
+            self.channel_accumulator.clear();
+            self.sample_buf.push_back(mono_sample);
+            self.run_fft_if_ready();
+        }
+    }
+
+    fn run_fft_if_ready(&mut self) {
+        while self.sample_buf.len() >= FFT_SIZE {
+            {
+                let (front, back) = self.sample_buf.as_slices();
+                if front.len() >= FFT_SIZE {
+                    for (dst, (&s, &w)) in self
+                        .fft_buf
+                        .iter_mut()
+                        .zip(front.iter().zip(self.hann_window.iter()))
+                    {
+                        *dst = Complex::new(s * w, 0.0);
+                    }
+                } else {
+                    let split = front.len();
+                    for (dst, (&s, &w)) in self.fft_buf[..split]
+                        .iter_mut()
+                        .zip(front.iter().zip(self.hann_window[..split].iter()))
+                    {
+                        *dst = Complex::new(s * w, 0.0);
+                    }
+                    let remaining = FFT_SIZE - split;
+                    for (dst, (&s, &w)) in self.fft_buf[split..].iter_mut().zip(
+                        back[..remaining]
+                            .iter()
+                            .zip(self.hann_window[split..].iter()),
+                    ) {
+                        *dst = Complex::new(s * w, 0.0);
+                    }
+                }
+            }
+
+            self.fft.process(&mut self.fft_buf);
+
+            for (mag, c) in self.magnitudes.iter_mut().zip(self.fft_buf.iter()) {
+                *mag = c.norm();
+            }
+
+            fill_log_bands(&self.magnitudes, &self.band_ranges, &mut self.new_bands);
+            smooth_bands(&mut self.new_bands, &mut self.smooth_scratch);
+
+            if let Ok(mut g) = self.bands.lock() {
+                let elapsed_hops =
+                    g.updated_at.elapsed().as_secs_f32() * self.sample_rate / HOP_SIZE as f32;
+                let decay = DECAY_FACTOR.powf(elapsed_hops);
+                let peak_decay = DECAY_FACTOR_PEAK.powf(elapsed_hops);
+                let frame_peak = self.new_bands.iter().copied().fold(0.0_f32, f32::max);
+                for (stored, fresh) in g.values.iter_mut().zip(self.new_bands.iter()) {
+                    *stored = (*stored * decay).max(*fresh);
+                }
+                g.peak_envelope = (g.peak_envelope * peak_decay).max(frame_peak);
+                g.updated_at = Instant::now();
+                g.is_active = true;
+            }
+
+            self.sample_buf.drain(..HOP_SIZE);
         }
     }
 }
 
-impl Sink for VisualizationSink {
-    fn start(&mut self) -> SinkResult<()> {
-        self.inner.start()
+/// A wrapper around a `rodio::Source` that computes real-time FFT bands as audio plays.
+pub struct FftSource<S> {
+    inner: S,
+    processor: FftProcessor,
+    channels: u16,
+}
+
+impl<S> FftSource<S>
+where
+    S: rodio::Source<Item = f32>,
+{
+    pub fn new(inner: S, bands: Arc<Mutex<VisBands>>) -> Self {
+        let channels = inner.channels();
+        let sample_rate = inner.sample_rate() as f32;
+        let processor = FftProcessor::new(bands, sample_rate);
+        Self {
+            inner,
+            processor,
+            channels,
+        }
+    }
+}
+
+impl<S> Iterator for FftSource<S>
+where
+    S: rodio::Source<Item = f32>,
+{
+    type Item = f32;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next()?;
+        self.processor.process_sample(sample, self.channels);
+        Some(sample)
+    }
+}
+
+impl<S> rodio::Source for FftSource<S>
+where
+    S: rodio::Source<Item = f32>,
+{
+    #[inline]
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
     }
 
-    fn stop(&mut self) -> SinkResult<()> {
-        if let Ok(mut g) = self.bands.lock() {
-            g.values.fill(0.0);
-            g.peak_envelope = 1e-6;
-            g.updated_at = Instant::now();
-            g.is_active = false;
-        }
-        self.sample_buf.clear();
-        self.inner.stop()
+    #[inline]
+    fn channels(&self) -> u16 {
+        self.inner.channels()
     }
 
-    fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
-        if let AudioPacket::Samples(ref samples) = packet {
-            // Interleaved stereo -> mono.
-            self.sample_buf.extend(samples.chunks(2).map(|c| {
-                if c.len() == 2 {
-                    f64::midpoint(c[0], c[1]) as f32
-                } else {
-                    c[0] as f32
-                }
-            }));
+    #[inline]
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
 
-            while self.sample_buf.len() >= FFT_SIZE {
-                {
-                    let (front, back) = self.sample_buf.as_slices();
-                    if front.len() >= FFT_SIZE {
-                        for (dst, (&s, &w)) in self
-                            .fft_buf
-                            .iter_mut()
-                            .zip(front.iter().zip(self.hann_window.iter()))
-                        {
-                            *dst = Complex::new(s * w, 0.0);
-                        }
-                    } else {
-                        let split = front.len();
-                        for (dst, (&s, &w)) in self.fft_buf[..split]
-                            .iter_mut()
-                            .zip(front.iter().zip(self.hann_window[..split].iter()))
-                        {
-                            *dst = Complex::new(s * w, 0.0);
-                        }
-                        let remaining = FFT_SIZE - split;
-                        for (dst, (&s, &w)) in self.fft_buf[split..].iter_mut().zip(
-                            back[..remaining]
-                                .iter()
-                                .zip(self.hann_window[split..].iter()),
-                        ) {
-                            *dst = Complex::new(s * w, 0.0);
-                        }
-                    }
-                }
-
-                self.fft.process(&mut self.fft_buf);
-
-                for (mag, c) in self.magnitudes.iter_mut().zip(self.fft_buf.iter()) {
-                    *mag = c.norm();
-                }
-
-                fill_log_bands(&self.magnitudes, &self.band_ranges, &mut self.new_bands);
-                smooth_bands(&mut self.new_bands, &mut self.smooth_scratch);
-
-                if let Ok(mut g) = self.bands.lock() {
-                    let elapsed_hops =
-                        g.updated_at.elapsed().as_secs_f32() * self.sample_rate / HOP_SIZE as f32;
-                    let decay = DECAY_FACTOR.powf(elapsed_hops);
-                    let peak_decay = DECAY_FACTOR_PEAK.powf(elapsed_hops);
-                    let frame_peak = self.new_bands.iter().copied().fold(0.0_f32, f32::max);
-                    for (stored, fresh) in g.values.iter_mut().zip(self.new_bands.iter()) {
-                        *stored = (*stored * decay).max(*fresh);
-                    }
-                    g.peak_envelope = (g.peak_envelope * peak_decay).max(frame_peak);
-                    g.updated_at = Instant::now();
-                }
-
-                self.sample_buf.drain(..HOP_SIZE);
-            }
-        }
-
-        self.inner.write(packet, converter)
+    #[inline]
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
     }
 }
 
