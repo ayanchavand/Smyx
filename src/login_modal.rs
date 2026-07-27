@@ -83,13 +83,23 @@ impl LoginModalState {
         }
 
         match key.code {
-            KeyCode::Tab | KeyCode::Down => {
-                self.active_field = self.active_field.next();
+            KeyCode::Tab => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                    self.active_field = self.active_field.prev();
+                } else {
+                    self.active_field = self.active_field.next();
+                }
             }
             KeyCode::BackTab | KeyCode::Up => {
                 self.active_field = self.active_field.prev();
             }
+            KeyCode::Down => {
+                self.active_field = self.active_field.next();
+            }
             KeyCode::Enter => {
+                return self.submit();
+            }
+            KeyCode::Char(' ') if self.active_field == LoginField::Submit => {
                 return self.submit();
             }
             KeyCode::Char(c) => {
@@ -119,6 +129,49 @@ impl LoginModalState {
             KeyCode::Esc => {
                 // Clear active error message on Esc
                 self.error_message = None;
+            }
+            _ => {}
+        }
+
+        LoginModalAction::None
+    }
+
+    pub fn handle_mouse_event(
+        &mut self,
+        col: u16,
+        row: u16,
+        screen_width: u16,
+        screen_height: u16,
+    ) -> LoginModalAction {
+        if self.is_connecting {
+            return LoginModalAction::None;
+        }
+
+        let modal_width = 60.min(screen_width.saturating_sub(4));
+        let modal_height = 18.min(screen_height.saturating_sub(2));
+
+        let start_y = (screen_height.saturating_sub(modal_height)) / 2;
+        let start_x = (screen_width.saturating_sub(modal_width)) / 2;
+
+        if col < start_x || col >= start_x + modal_width || row < start_y || row >= start_y + modal_height {
+            return LoginModalAction::None;
+        }
+
+        let rel_y = row.saturating_sub(start_y + 2);
+
+        match rel_y {
+            0..=2 => {
+                self.active_field = LoginField::ServerUrl;
+            }
+            3..=5 => {
+                self.active_field = LoginField::Username;
+            }
+            6..=8 => {
+                self.active_field = LoginField::Password;
+            }
+            9..=11 => {
+                self.active_field = LoginField::Submit;
+                return self.submit();
             }
             _ => {}
         }

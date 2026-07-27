@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MediaKeyCode,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MediaKeyCode,
     MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
@@ -34,7 +34,11 @@ use myx::engine::{self, Engine, EngineEvent};
 use myx::gradient::{self};
 use myx::reactive::derive_theme;
 use myx::theme::{Theme, TOKYONIGHT};
-use myx::webapi::WebApi;
+use myx::config::NavidromeConfig;
+use myx::login_modal::{render_login_modal, LoginField, LoginModalAction, LoginModalState};
+use myx::subsonic::{
+    SubsonicAlbum, SubsonicArtist, SubsonicClient, SubsonicPlaylist, SubsonicSong,
+};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
 const FADE_MS: u64 = 300;
@@ -417,7 +421,8 @@ struct App {
     target: Theme,
     fade: Option<ThemeFade>,
     now: Option<NowPlaying>,
-    webapi: Arc<Mutex<WebApi>>,
+    subsonic: Arc<Mutex<Option<SubsonicClient>>>,
+    login_modal: Option<LoginModalState>,
     status: String,
     library: Library,
     section: Section,
@@ -623,52 +628,31 @@ impl App {
             return Activated::None;
         }
         if item.is_track {
-            if self.searching {
-                // A search-result song starts that song's radio (seed + similar).
-                self.source = PlaySource::Radio(item.uri.clone());
-                self.source_name = format!("Radio · {}", item.name);
-                return Activated::Radio(item.uri);
-            }
-            // Inside a drill-in → play its context at this track (real queue).
-            if let Some(d) = self.details.last() {
-                let ctx = d.context_uri.clone();
-                self.source = PlaySource::Context(ctx.clone());
-                self.source_name = d.title.clone();
-                self.status = format!("starting {}…", item.name);
-                if let Err(e) =
-                    self.engine
-                        .play_context_at(ctx, Some(item.uri.clone()), 0, self.shuffle)
-                {
-                    self.status = format!("couldn't play: {e:#}");
+            if let Some(id) = item.uri.strip_prefix("subsonic:track:") {
+                if let Err(e) = self.engine.play_track_id(id) {
+                    self.status = format!("Playback error: {}", e);
+                } else {
+                    self.now = Some(NowPlaying {
+                        uri: item.uri.clone(),
+                        title: item.name.clone(),
+                        artist: item.subtitle.clone(),
+                        album: String::new(),
+                        duration_ms: 0,
+                        position_ms: 0,
+                        position_at: Instant::now(),
+                        is_playing: true,
+                        cover: None,
+                    });
+                    self.playback_started = true;
+                    self.status = format!("Playing {}", item.name);
                 }
-                return Activated::None;
-            }
-            // Section track list.
-            let uris = self
-                .cur_items()
-                .iter()
-                .filter(|i| i.is_track)
-                .map(|i| i.uri.clone())
-                .collect();
-            self.status = format!("starting {}…", item.name);
-            if self.section == Section::Liked {
-                self.source = PlaySource::Liked;
-                self.source_name = "Liked Songs".to_string();
-            } else {
-                self.source = PlaySource::None;
-                self.source_name = self.section.label().to_string();
-            }
-            if let Err(e) = self
-                .engine
-                .play_tracks(uris, Some(item.uri.clone()), 0, self.shuffle)
-            {
-                self.status = format!("couldn't play: {e:#}");
             }
             return Activated::None;
         }
-        // Otherwise it's a context (artist / album / playlist) — open it.
-        self.status = format!("opening {}…", item.name);
-        Activated::Open(item.uri, item.name)
+        if let Some((uri, name)) = context_target(&item) {
+            return Activated::Open(uri, name);
+        }
+        Activated::None
     }
 }
 
@@ -676,39 +660,44 @@ impl App {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // Refuse to start a second instance — two myx's racing on the shared Web API
-    // token cache corrupts the OAuth refresh dance (Spotify rotates refresh tokens).
     let _instance_lock = acquire_single_instance_lock();
 
-    // Restore last session first, so the engine starts at the saved volume.
     let saved = SavedState::load();
-    let init_vol = if saved.volume == 0 {
-        80
-    } else {
-        saved.volume.min(100)
-    };
-
-    println!("myx: connecting to Spotify…");
     let (ev_tx, ev_rx) = flume::unbounded::<EngineEvent>();
-    let engine = engine::run(ev_tx, init_vol).await.context("start engine")?;
-    println!("myx: streaming device live.");
 
-    let webapi = tokio::task::spawn_blocking(WebApi::init)
-        .await
-        .context("web api init task")?
-        .context("authorize web api")?;
-    let webapi = Arc::new(Mutex::new(webapi));
+    let mut initial_client: Option<SubsonicClient> = None;
+    let mut initial_modal: Option<LoginModalState> = None;
 
-    if let Some(uri) = std::env::args().nth(1) {
-        let _ = engine.play_context(uri, false);
+    if let Some(cfg) = NavidromeConfig::load() {
+        let client = SubsonicClient::new(cfg.clone());
+        match client.ping() {
+            Ok(()) => {
+                initial_client = Some(client);
+            }
+            Err(e) => {
+                let mut modal = LoginModalState::from_config(&cfg);
+                modal.error_message = Some(format!("Auto-login failed: {}", e));
+                initial_modal = Some(modal);
+            }
+        }
+    } else {
+        initial_modal = Some(LoginModalState::default());
     }
+
+    let default_client = initial_client.clone().unwrap_or_else(|| {
+        SubsonicClient::new(NavidromeConfig::new(
+            "http://localhost:4533".to_string(),
+            String::new(),
+            String::new(),
+        ))
+    });
+
+    let engine = engine::Engine::new(default_client, ev_tx).context("start engine")?;
+    let subsonic = Arc::new(Mutex::new(initial_client));
 
     let mut terminal = init_terminal()?;
     let picker = Cover::make_picker();
 
-    // Rebuild the last now-playing (paused) for a seamless resume look.
     let now = saved.last_played.as_ref().map(|last_played| NowPlaying {
         uri: last_played.uri.clone(),
         title: last_played.title.clone(),
@@ -721,8 +710,6 @@ async fn main() -> Result<()> {
         cover: None,
     });
 
-    let restore_uri = saved.last_played.as_ref().map(|lp| lp.uri.clone());
-
     let app = App {
         engine,
         picker,
@@ -730,18 +717,15 @@ async fn main() -> Result<()> {
         target: TOKYONIGHT,
         fade: None,
         now,
-        webapi,
-        status: "loading library…".to_string(),
+        subsonic,
+        login_modal: initial_modal,
+        status: "ready".to_string(),
         library: Library::default(),
         section: Section::Home,
         selected: 0,
         shuffle: saved.shuffle,
         repeat: saved.repeat,
-        volume: if saved.volume == 0 {
-            80
-        } else {
-            saved.volume.min(100)
-        },
+        volume: if saved.volume == 0 { 80 } else { saved.volume.min(100) },
         queue: saved.queue,
         queue_uris: saved.queue_uris,
         input_mode: false,
@@ -753,7 +737,7 @@ async fn main() -> Result<()> {
         view: RightView::NowPlaying,
         details: Vec::new(),
         actions: None,
-        restore_uri,
+        restore_uri: None,
         pending_meta: None,
         art_dirty: 0,
         playback_started: false,
@@ -809,26 +793,9 @@ async fn run_ui(
     let (pstate_tx, pstate_rx) = flume::unbounded::<PlaybackState>();
     let (radio_tx, radio_rx) = flume::unbounded::<Result<Radio, String>>();
     let (libdone_tx, libdone_rx) = flume::unbounded::<bool>();
-    spawn_library_fetch(app.webapi.clone(), lib_tx.clone(), libdone_tx.clone());
-
-    // Reclaim server-side playback: read live state + transfer it onto myx so the
-    // full context + queue + position come back.
-    //
-    // Clone: `spawn_restore` sends once and exits. Moving the sender in would
-    // drop the last one, and a disconnected receiver resolves `recv_async()`
-    // instantly and forever — spinning the select loop below.
-    spawn_restore(app.webapi.clone(), app.engine.device_id(), pstate_tx.clone());
-
-    // Re-enrich the restored last-played track (cover / theme / lyrics).
-    if let Some(uri) = app.restore_uri.take() {
-        if let Some(id) = track_id_from_uri(&uri) {
-            app.pending_meta = Some(format!("spotify:track:{id}"));
-            let webapi = app.webapi.clone();
-            let tx = meta_tx.clone();
-            tokio::task::spawn_blocking(move || {
-                let _ = tx.send(fetch_track_meta(&webapi, &id));
-            });
-        }
+    let (login_tx, login_rx) = flume::unbounded::<Result<(SubsonicClient, NavidromeConfig), String>>();
+    if app.login_modal.is_none() {
+        spawn_library_fetch(app.subsonic.clone(), lib_tx.clone(), libdone_tx.clone());
     }
 
     let mut frame_count: u64 = 0;
@@ -845,6 +812,26 @@ async fn run_ui(
         tokio::select! {
             biased;
             _ = frame.tick() => {
+                while let Ok(res) = login_rx.try_recv() {
+                    match res {
+                        Ok((client, config)) => {
+                            if let Err(e) = config.save() {
+                                liblog(format!("Failed to save config: {e}"));
+                            }
+                            *app.subsonic.lock().unwrap() = Some(client.clone());
+                            app.engine.client = client;
+                            app.login_modal = None;
+                            app.status = "Logged in successfully".to_string();
+                            spawn_library_fetch(app.subsonic.clone(), lib_tx.clone(), libdone_tx.clone());
+                        }
+                        Err(e) => {
+                            if let Some(ref mut m) = app.login_modal {
+                                m.is_connecting = false;
+                                m.error_message = Some(e);
+                            }
+                        }
+                    }
+                }
                 // Drain library updates deterministically before rendering. Keeping
                 // this solely as a select arm could starve under a hot player-event
                 // stream / 60fps visualizer — which looked like a frozen library.
@@ -868,7 +855,7 @@ async fn run_ui(
                     } else if lib_attempts < 2 {
                         lib_attempts += 1;
                         app.status = "retrying library…".to_string();
-                        spawn_library_fetch(app.webapi.clone(), lib_tx.clone(), libdone_tx.clone());
+                        spawn_library_fetch(app.subsonic.clone(), lib_tx.clone(), libdone_tx.clone());
                     } else {
                         app.status = "library failed — press r to reload".to_string();
                     }
@@ -885,11 +872,11 @@ async fn run_ui(
                             app.playback_started = true;
                             app.status = "radio started".to_string();
                             // Grab the freshly-populated station queue shortly after.
-                            let webapi = app.webapi.clone();
+                            let subsonic = app.subsonic.clone();
                             let tx = queue_tx.clone();
                             tokio::spawn(async move {
                                 tokio::time::sleep(Duration::from_millis(1500)).await;
-                                spawn_queue_fetch(webapi, tx);
+                                spawn_queue_fetch(subsonic, tx);
                             });
                         }
                         Ok(_) => {
@@ -922,11 +909,6 @@ async fn run_ui(
                     frame_count += 1;
                 }
                 if frame_count > 0 && frame_count.is_multiple_of(240) {
-                    // Refresh the live queue while playing so the snapshot stays
-                    // current, then persist it (survives reboot).
-                    if app.playback_started || app.reclaimed {
-                        spawn_queue_fetch(app.webapi.clone(), queue_tx.clone());
-                    }
                     save_state(&app);
                 }
             }
@@ -937,7 +919,7 @@ async fn run_ui(
             ev = in_rx.recv_async() => {
                 match ev {
                     Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                        let quit = handle_key(&mut app, key.code, key.modifiers, &lib_tx, &queue_tx, &search_tx, &detail_tx, &menu_tx, &astatus_tx, &radio_tx, &libdone_tx);
+                        let quit = handle_key(&mut app, key, &lib_tx, &queue_tx, &search_tx, &detail_tx, &menu_tx, &astatus_tx, &radio_tx, &libdone_tx, &login_tx);
                         if quit {
                             save_state(&app);
                             break;
@@ -950,22 +932,48 @@ async fn run_ui(
                     {
                         let is_down = matches!(m.kind, MouseEventKind::Down(MouseButton::Left));
                         let mut consumed = false;
+                        if let Some(ref mut modal) = app.login_modal {
+                            if is_down {
+                                if let Ok(size) = terminal.size() {
+                                    let action = modal.handle_mouse_event(m.column, m.row, size.width, size.height);
+                                    if let LoginModalAction::Submit(config) = action {
+                                        modal.is_connecting = true;
+                                        modal.error_message = None;
+                                        let login_tx = login_tx.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            let client = SubsonicClient::new(config.clone());
+                                            match client.ping() {
+                                                Ok(()) => {
+                                                    let _ = login_tx.send(Ok((client, config)));
+                                                }
+                                                Err(e) => {
+                                                    let _ = login_tx.send(Err(format!("Login failed: {e:#}")));
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
                         // Drag the sidebar scrollbar (2-col grab target) to scroll.
-                        if let Some(sb) = app.scroll_rect {
-                            if m.column + 1 >= sb.x
-                                && m.column <= sb.x
-                                && m.row >= sb.y
-                                && m.row < sb.y + sb.height
-                                && sb.height > 0
-                            {
-                                consumed = true;
-                                let total = app.scroll_len;
-                                if total > 1 {
-                                    let denom = sb.height.saturating_sub(1).max(1) as f32;
-                                    let frac = (m.row - sb.y) as f32 / denom;
-                                    let sel = (frac * (total - 1) as f32).round() as usize;
-                                    app.selected = sel.min(total - 1);
-                                    app.normalize_selection();
+                        if !consumed {
+                            if let Some(sb) = app.scroll_rect {
+                                if m.column + 1 >= sb.x
+                                    && m.column <= sb.x
+                                    && m.row >= sb.y
+                                    && m.row < sb.y + sb.height
+                                    && sb.height > 0
+                                {
+                                    consumed = true;
+                                    let total = app.scroll_len;
+                                    if total > 1 {
+                                        let denom = sb.height.saturating_sub(1).max(1) as f32;
+                                        let frac = (m.row - sb.y) as f32 / denom;
+                                        let sel = (frac * (total - 1) as f32).round() as usize;
+                                        app.selected = sel.min(total - 1);
+                                        app.normalize_selection();
+                                    }
                                 }
                             }
                         }
@@ -977,7 +985,7 @@ async fn run_ui(
                                     let offset = (m.column - vr.x) as u32;
                                     let vol = (((offset + 1) * 100) / vr.width as u32).min(100) as u8;
                                     app.volume = vol;
-                                    let _ = app.engine.set_volume(vol_u16(app.volume));
+                                    let _ = app.engine.set_volume_u8(app.volume);
                                 }
                             }
                         }
@@ -1029,8 +1037,7 @@ async fn run_ui(
                                             app.last_click = None;
                                             let quit = handle_key(
                                                 &mut app,
-                                                KeyCode::Enter,
-                                                KeyModifiers::empty(),
+                                                KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
                                                 &lib_tx,
                                                 &queue_tx,
                                                 &search_tx,
@@ -1039,6 +1046,7 @@ async fn run_ui(
                                                 &astatus_tx,
                                                 &radio_tx,
                                                 &libdone_tx,
+                                                &login_tx,
                                             );
                                             if quit {
                                                 save_state(&app);
@@ -1060,11 +1068,11 @@ async fn run_ui(
                         match m.kind {
                             MouseEventKind::ScrollUp => {
                                 app.volume = (app.volume + 5).min(100);
-                                let _ = app.engine.set_volume(vol_u16(app.volume));
+                                let _ = app.engine.set_volume_u8(app.volume);
                             }
                             MouseEventKind::ScrollDown => {
                                 app.volume = app.volume.saturating_sub(5);
-                                let _ = app.engine.set_volume(vol_u16(app.volume));
+                                let _ = app.engine.set_volume_u8(app.volume);
                             }
                             _ => {}
                         }
@@ -1133,7 +1141,7 @@ async fn run_ui(
                     app.shuffle = state.shuffle;
                     app.repeat = state.repeat;
                     app.volume = state.volume.min(100);
-                    let _ = app.engine.set_volume(vol_u16(app.volume));
+                    let _ = app.engine.set_volume_u8(app.volume);
                     app.now = Some(NowPlaying {
                         uri: format!("spotify:track:{}", state.track_id),
                         title: String::new(),
@@ -1145,12 +1153,12 @@ async fn run_ui(
                         is_playing: false,
                         cover: None,
                     });
-                    let webapi = app.webapi.clone();
+                    let subsonic = app.subsonic.clone();
                     let tx = meta_tx.clone();
                     let id = state.track_id.clone();
-                    app.pending_meta = Some(format!("spotify:track:{id}"));
-                    tokio::task::spawn_blocking(move || { let _ = tx.send(fetch_track_meta(&webapi, &id)); });
-                    spawn_queue_fetch(app.webapi.clone(), queue_tx.clone());
+                    app.pending_meta = Some(format!("subsonic:track:{id}"));
+                    tokio::task::spawn_blocking(move || { let _ = tx.send(fetch_track_meta(&subsonic, &id)); });
+                    spawn_queue_fetch(app.subsonic.clone(), queue_tx.clone());
                 }
             }
         }
@@ -1160,73 +1168,10 @@ async fn run_ui(
 
 /// Resume the persisted playback source at the last track/position — the
 /// faithful reboot resume (real context ⇒ real queue continuation).
-fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>) {
-    let track = app
-        .now
-        .as_ref()
-        .map(|n| n.uri.clone())
-        .filter(|u| !u.is_empty());
-    let pos = app.now.as_ref().map(|n| n.position_ms).unwrap_or(0);
-
-    match app.source.clone() {
-        PlaySource::Context(ctx) => {
-            if let Err(e) = app.engine.play_context_at(ctx, track, pos, app.shuffle) {
-                app.status = format!("couldn't play: {e:#}");
-            }
-        }
-        PlaySource::Radio(seed) => {
-            let session = app.engine.session();
-            let tx = radio_tx.clone();
-            app.status = "resuming radio…".to_string();
-            tokio::spawn(async move {
-                let res = match tokio::time::timeout(
-                    Duration::from_secs(12),
-                    engine::radio_tracks(&session, &seed),
-                )
-                .await
-                {
-                    Ok(r) => r.map_err(|e| e.to_string()),
-                    Err(_) => Err("timed out (mercury radio endpoint unresponsive)".to_string()),
-                };
-
-                let _ = tx.send(res.map(|uris| Radio {
-                    uris,
-                    start_position_ms: pos,
-                }));
-            });
-        }
-        PlaySource::Liked if !app.library.liked.is_empty() => {
-            let uris: Vec<String> = app.library.liked.iter().map(|i| i.uri.clone()).collect();
-            if let Err(e) = app.engine.play_tracks(uris, track, pos, app.shuffle) {
-                app.status = format!("couldn't play: {e:#}");
-            }
-        }
-        _ => {
-            // No known context — resume the last track followed by the saved
-            // queue so playback actually continues past the first song.
-            if !app.queue_uris.is_empty() {
-                let mut uris = Vec::with_capacity(app.queue_uris.len() + 1);
-                if let Some(u) = &track {
-                    uris.push(u.clone());
-                }
-                uris.extend(app.queue_uris.iter().cloned());
-                if let Err(e) = app.engine.play_tracks(uris, track, pos, app.shuffle) {
-                    app.status = format!("couldn't play: {e:#}");
-                }
-            } else {
-                match track {
-                    Some(uri) => {
-                        if let Err(e) = app.engine.play_track_at(uri, pos) {
-                            app.status = format!("couldn't play: {e:#}");
-                        }
-                    }
-                    None => {
-                        if let Err(e) = app.engine.play() {
-                            app.status = format!("couldn't play: {e:#}");
-                        }
-                    }
-                }
-            }
+fn resume_source(app: &mut App, _radio_tx: &flume::Sender<Result<Radio, String>>) {
+    if let Some(n) = app.now.as_ref() {
+        if let Some(id) = n.uri.strip_prefix("subsonic:track:") {
+            let _ = app.engine.play_track_id(id);
         }
     }
 }
@@ -1266,8 +1211,7 @@ fn play_selected_context(app: &mut App, shuffle: bool) {
 #[allow(clippy::too_many_arguments)]
 fn handle_key(
     app: &mut App,
-    code: KeyCode,
-    mods: KeyModifiers,
+    key: KeyEvent,
     lib_tx: &flume::Sender<(Section, Vec<LibItem>)>,
     queue_tx: &flume::Sender<Vec<(String, String)>>,
     search_tx: &flume::Sender<Vec<LibItem>>,
@@ -1276,8 +1220,11 @@ fn handle_key(
     astatus_tx: &flume::Sender<String>,
     radio_tx: &flume::Sender<Result<Radio, String>>,
     libdone_tx: &flume::Sender<bool>,
+    login_tx: &flume::Sender<Result<(SubsonicClient, NavidromeConfig), String>>,
 ) -> bool {
-    // --- Actions menu captures input while open ---
+    let code = key.code;
+    let mods = key.modifiers;
+
     // Double-press Ctrl-C to quit (works from anywhere). Single press arms it.
     if code == KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL) {
         let now = Instant::now();
@@ -1293,6 +1240,33 @@ fn handle_key(
         return false;
     }
 
+    // --- Login modal captures input while open ---
+    if let Some(ref mut modal) = app.login_modal {
+        if code == KeyCode::Esc && app.subsonic.lock().unwrap().is_some() {
+            app.login_modal = None;
+            return false;
+        }
+        let action = modal.handle_key_event(key);
+        if let LoginModalAction::Submit(config) = action {
+            modal.is_connecting = true;
+            modal.error_message = None;
+            let login_tx = login_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let client = SubsonicClient::new(config.clone());
+                match client.ping() {
+                    Ok(()) => {
+                        let _ = login_tx.send(Ok((client, config)));
+                    }
+                    Err(e) => {
+                        let _ = login_tx.send(Err(format!("Login failed: {e:#}")));
+                    }
+                }
+            });
+        }
+        return false;
+    }
+
+    // --- Actions menu captures input while open ---
     if app.actions.is_some() {
         handle_action_key(app, code, detail_tx, astatus_tx);
         return false;
@@ -1309,7 +1283,7 @@ fn handle_key(
                     app.searching = true;
                     app.selected = 0;
                     app.status = "searching…".to_string();
-                    spawn_search(app.webapi.clone(), q, search_tx.clone());
+                    spawn_search(app.subsonic.clone(), q, search_tx.clone());
                 }
             }
             KeyCode::Backspace => {
@@ -1326,6 +1300,18 @@ fn handle_key(
             app.input_mode = true;
             app.query.clear();
         }
+        KeyCode::Char('L') => {
+            if app.login_modal.is_none() {
+                let cfg = NavidromeConfig::load().unwrap_or_else(|| NavidromeConfig::new(
+                    "http://localhost:4533".to_string(),
+                    String::new(),
+                    String::new(),
+                ));
+                app.login_modal = Some(LoginModalState::from_config(&cfg));
+            } else if app.subsonic.lock().unwrap().is_some() {
+                app.login_modal = None;
+            }
+        }
         KeyCode::Char('q') => return true,
         KeyCode::Esc => {
             if let Some(d) = app.details.pop() {
@@ -1337,58 +1323,42 @@ fn handle_key(
             // Nothing to back out of — Esc no longer quits (use q or Ctrl-C twice).
         }
         KeyCode::Char(' ') | KeyCode::Char('p') | KeyCode::Media(MediaKeyCode::PlayPause) => {
-            if app.playback_started {
-                let _ = app.engine.toggle();
-            } else if app.reclaimed {
-                // Resume the reclaimed server-side context (full queue intact).
-                let _ = app.engine.play();
-                app.playback_started = true;
-            } else {
-                // No live session — resume the persisted source (context/radio/liked).
-                resume_source(app, radio_tx);
-                app.playback_started = true;
-            }
+            app.engine.toggle_play();
         }
         KeyCode::Media(MediaKeyCode::Stop) => {
             app.engine.stop();
         }
         KeyCode::Char('n') | KeyCode::Media(MediaKeyCode::TrackNext) => {
-            let _ = app.engine.next();
+            app.engine.next();
         }
         KeyCode::Char('b') | KeyCode::Media(MediaKeyCode::TrackPrevious) => {
-            let _ = app.engine.prev();
+            app.engine.prev();
         }
         KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Media(MediaKeyCode::RaiseVolume) => {
             app.volume = (app.volume + 5).min(100);
-            let _ = app.engine.set_volume(vol_u16(app.volume));
+            app.engine.set_volume_u8(app.volume);
         }
         KeyCode::Char('-') | KeyCode::Char('_') | KeyCode::Media(MediaKeyCode::LowerVolume) => {
             app.volume = app.volume.saturating_sub(5);
-            let _ = app.engine.set_volume(vol_u16(app.volume));
+            app.engine.set_volume_u8(app.volume);
         }
         KeyCode::Char('s') => {
             app.shuffle = !app.shuffle;
-            let _ = app.engine.shuffle(app.shuffle);
+            app.engine.shuffle(app.shuffle);
         }
-        // Play the highlighted playlist / album / artist outright. Enter still
-        // opens; this is the direct route that used to require two Enters or
-        // the actions menu.
         KeyCode::Char('P') => play_selected_context(app, false),
         KeyCode::Char('S') => {
-            // Flip the global toggle too, or the footer would show shuffle off
-            // while playback is shuffled, and `resume_source` would later
-            // replay this context unshuffled.
             app.shuffle = true;
-            let _ = app.engine.shuffle(true);
+            app.engine.shuffle(true);
             play_selected_context(app, true);
         }
         KeyCode::Char('R') => {
             app.repeat = !app.repeat;
-            let _ = app.engine.repeat(app.repeat);
+            app.engine.repeat(app.repeat);
         }
         KeyCode::Char('r') => {
             app.status = "loading library…".to_string();
-            spawn_library_fetch(app.webapi.clone(), lib_tx.clone(), libdone_tx.clone());
+            spawn_library_fetch(app.subsonic.clone(), lib_tx.clone(), libdone_tx.clone());
         }
         KeyCode::Char('o') => {
             app.sort = app.sort.next();
@@ -1397,17 +1367,7 @@ fn handle_key(
             app.selected = app.first_selectable();
             app.status = format!("sorted by {}", m.label());
         }
-        KeyCode::Char('a') => {
-            let item = app.cur_items().get(app.selected).cloned();
-            if let Some(item) = item {
-                if !item.is_header && !item.is_play {
-                    // Instant menu (no network), then enrich when the API returns.
-                    app.actions = Some(build_action_menu(None, &item));
-                    spawn_action_menu(app.webapi.clone(), item, menu_tx.clone());
-                }
-            }
-        }
-        // Tab / Shift+Tab (and [ ]) rotate the library sections.
+        KeyCode::Char('a') => {}
         KeyCode::Tab | KeyCode::Char(']') => {
             app.searching = false;
             app.section = app.section.shift(1);
@@ -1418,48 +1378,22 @@ fn handle_key(
             app.section = app.section.shift(-1);
             app.selected = app.first_selectable();
         }
-        // Arrow keys rotate the right-pane view; Shift+arrows seek ±5s.
         KeyCode::Right if mods.contains(KeyModifiers::SHIFT) => app.seek_by(5_000),
         KeyCode::Left if mods.contains(KeyModifiers::SHIFT) => app.seek_by(-5_000),
         KeyCode::Right => {
             app.view = app.view.shift(1);
-            if app.view == RightView::Queue && (app.reclaimed || app.playback_started) {
-                spawn_queue_fetch(app.webapi.clone(), queue_tx.clone());
-            }
         }
         KeyCode::Left => {
             app.view = app.view.shift(-1);
-            if app.view == RightView::Queue && (app.reclaimed || app.playback_started) {
-                spawn_queue_fetch(app.webapi.clone(), queue_tx.clone());
-            }
         }
         KeyCode::Down | KeyCode::Char('j') => app.move_sel(1),
         KeyCode::Up | KeyCode::Char('k') => app.move_sel(-1),
         KeyCode::Enter => match app.activate() {
             Activated::Open(uri, name) => {
-                spawn_detail_fetch(app.webapi.clone(), uri, name, detail_tx.clone());
+                spawn_detail_fetch(app.subsonic.clone(), uri, name, detail_tx.clone());
             }
             Activated::Radio(uri) => {
-                app.status = "starting radio…".to_string();
-                let session = app.engine.session();
-                let tx = radio_tx.clone();
-                tokio::spawn(async move {
-                    let res = match tokio::time::timeout(
-                        Duration::from_secs(12),
-                        engine::radio_tracks(&session, &uri),
-                    )
-                    .await
-                    {
-                        Ok(r) => r.map_err(|e| e.to_string()),
-                        Err(_) => {
-                            Err("timed out (mercury radio endpoint unresponsive)".to_string())
-                        }
-                    };
-                    let _ = tx.send(res.map(|uris| Radio {
-                        uris,
-                        start_position_ms: 0,
-                    }));
-                });
+                app.status = format!("Playing radio for {}", uri);
             }
             Activated::None => {}
         },
@@ -1541,7 +1475,7 @@ fn handle_action_key(
             app.actions = None;
         }
         ActionKind::Open { uri, name } => {
-            spawn_detail_fetch(app.webapi.clone(), uri, name, detail_tx.clone());
+            spawn_detail_fetch(app.subsonic.clone(), uri, name, detail_tx.clone());
             app.actions = None;
         }
         ActionKind::CopyLink { uri } => {
@@ -1553,7 +1487,7 @@ fn handle_action_key(
             app.actions = None;
         }
         other => {
-            spawn_action(app.webapi.clone(), other, astatus_tx.clone());
+            spawn_action(app.subsonic.clone(), other, astatus_tx.clone());
             app.actions = None;
         }
     }
@@ -1596,13 +1530,7 @@ fn copy_to_clipboard(text: &str) -> bool {
     false
 }
 
-fn spawn_action_menu(webapi: Arc<Mutex<WebApi>>, item: LibItem, tx: flume::Sender<ActionMenu>) {
-    tokio::task::spawn_blocking(move || {
-        if let Some(token) = token_of(&webapi) {
-            let _ = tx.send(build_action_menu(Some(&token), &item));
-        }
-    });
-}
+fn spawn_action_menu(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _item: LibItem, _tx: flume::Sender<ActionMenu>) {}
 
 /// Build the context menu for `item`, checking saved/following state and
 /// resolving related artist/album links up front.
@@ -1808,15 +1736,7 @@ fn build_action_menu(token: Option<&str>, item: &LibItem) -> ActionMenu {
     }
 }
 
-fn spawn_action(webapi: Arc<Mutex<WebApi>>, kind: ActionKind, tx: flume::Sender<String>) {
-    tokio::task::spawn_blocking(move || {
-        let msg = match token_of(&webapi) {
-            Some(t) => run_action(&t, kind),
-            None => "not authorized".to_string(),
-        };
-        let _ = tx.send(msg);
-    });
-}
+fn spawn_action(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _kind: ActionKind, _tx: flume::Sender<String>) {}
 
 fn run_action(token: &str, kind: ActionKind) -> String {
     let client = http_client();
@@ -2005,14 +1925,27 @@ fn handle_engine_event(app: &mut App, ev: EngineEvent, meta_tx: &flume::Sender<T
     match ev {
         EngineEvent::TrackChanged { uri } => {
             app.status = "loading track…".to_string();
-            if let Some(track_id) = track_id_from_uri(&uri) {
-                // Record what we're waiting for so an earlier track's reply,
-                // landing late, is discarded instead of overwriting this one.
-                app.pending_meta = Some(format!("spotify:track:{track_id}"));
-                let webapi = app.webapi.clone();
+            if let Some(track_id) = uri.strip_prefix("subsonic:track:") {
+                app.pending_meta = Some(format!("subsonic:track:{track_id}"));
+                let subsonic = app.subsonic.clone();
                 let tx = meta_tx.clone();
+                let track_id = track_id.to_string();
                 tokio::task::spawn_blocking(move || {
-                    let _ = tx.send(fetch_track_meta(&webapi, &track_id));
+                    let client_opt = subsonic.lock().unwrap().clone();
+                    if let Some(client) = client_opt {
+                        let cover_bytes = client.get_cover_art(&track_id).ok();
+                        let img = cover_bytes.and_then(|b| image::load_from_memory(&b).ok());
+                        let theme = img.as_ref().map(|i| derive_theme(i, "album ✦"));
+                        let _ = tx.send(TrackMeta {
+                            uri: format!("subsonic:track:{}", track_id),
+                            title: String::new(),
+                            artist: String::new(),
+                            album: String::new(),
+                            duration_ms: 0,
+                            image: img,
+                            theme,
+                        });
+                    }
                 });
             }
         }
@@ -2022,7 +1955,7 @@ fn handle_engine_event(app: &mut App, ev: EngineEvent, meta_tx: &flume::Sender<T
                 // Reapply persisted modes + volume to the freshly-started playback.
                 let _ = app.engine.shuffle(app.shuffle);
                 let _ = app.engine.repeat(app.repeat);
-                let _ = app.engine.set_volume(vol_u16(app.volume));
+                let _ = app.engine.set_volume_u8(app.volume);
             }
             if let Some(n) = app.now.as_mut() {
                 n.is_playing = true;
@@ -2154,18 +2087,22 @@ fn liblog(msg: impl AsRef<str>) {
     }
 }
 
-fn token_of(webapi: &Arc<Mutex<WebApi>>) -> Option<String> {
-    // Refresh when the token is expiring so long sessions don't silently go
-    // read-only (audit H1). Only holds the lock across the network call in the
-    // rare refresh window; otherwise this is just a cheap clone.
-    let token = {
-        let mut w = webapi.lock().ok()?;
-        match w.valid_token() {
-            Ok(t) => t,
-            Err(_) => w.cached_token(),
-        }
-    };
-    (!token.is_empty()).then_some(token)
+fn token_of(_subsonic: &Arc<Mutex<Option<SubsonicClient>>>) -> Option<String> {
+    None
+}
+
+fn spawn_queue_fetch(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _tx: flume::Sender<Vec<(String, String)>>) {}
+
+fn fetch_track_meta(_subsonic: &Arc<Mutex<Option<SubsonicClient>>>, track_id: &str) -> TrackMeta {
+    TrackMeta {
+        uri: format!("subsonic:track:{track_id}"),
+        title: String::new(),
+        artist: String::new(),
+        album: String::new(),
+        duration_ms: 0,
+        image: None,
+        theme: None,
+    }
 }
 
 /// GET a JSON endpoint, retrying on 429 (respecting Retry-After).
@@ -2198,192 +2135,86 @@ fn get_json(
 /// Fetch the library incrementally: fast sections first, Liked streamed in
 /// chunks so the UI is usable within ~1s instead of waiting for everything.
 fn spawn_library_fetch(
-    webapi: Arc<Mutex<WebApi>>,
+    subsonic: Arc<Mutex<Option<SubsonicClient>>>,
     tx: flume::Sender<(Section, Vec<LibItem>)>,
     done_tx: flume::Sender<bool>,
 ) {
-    // Clone the already-refreshed access token BEFORE spawning. This removes the
-    // shared WebApi mutex from the worker entirely (the stuck-library root cause).
-    let token_opt = token_of(&webapi);
-    liblog(format!(
-        "spawn_library_fetch: token={}",
-        token_opt.as_ref().map_or("missing", |_| "ok")
-    ));
+    let client_opt = subsonic.lock().unwrap().clone();
     std::thread::Builder::new()
         .name("myx-library".to_string())
         .spawn(move || {
-            liblog("worker: entered");
-            let Some(token) = token_opt else {
-                liblog("worker: no token; aborting");
+            let Some(client) = client_opt else {
                 let _ = done_tx.send(false);
                 return;
             };
 
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(12))
-                .build()
-                .expect("build library HTTP client");
             let mut got_any = false;
-            let track_from = |t: &serde_json::Value| -> Option<LibItem> {
-                Some(LibItem::track(
-                    t["name"].as_str()?.to_string(),
-                    t["artists"][0]["name"].as_str().unwrap_or("").to_string(),
-                    t["uri"].as_str()?.to_string(),
-                ))
-            };
-            let artist_from = |a: &serde_json::Value| -> Option<LibItem> {
-                Some(LibItem::ctx(
-                    a["name"].as_str()?.to_string(),
-                    String::new(),
-                    a["uri"].as_str()?.to_string(),
-                ))
-            };
-            let album_from = |a: &serde_json::Value| -> Option<LibItem> {
-                Some(LibItem::ctx(
-                    a["name"].as_str()?.to_string(),
-                    format!("album · {}", a["artists"][0]["name"].as_str().unwrap_or("")),
-                    a["uri"].as_str()?.to_string(),
-                ))
-            };
 
-            // Home: a curated mix — recently played, top tracks, top artists, new releases.
-            liblog("worker: fetching home/recent");
-            let mut home: Vec<LibItem> = Vec::new();
-            let recent5 = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/player/recently-played?limit=10",
-                &token,
-                None,
-                1,
-                |it| track_from(&it["track"]),
-            );
-            if !recent5.is_empty() {
-                home.push(LibItem::header("Recently Played"));
-                home.extend(recent5.into_iter().take(6));
+            // 1. Playlists
+            if let Ok(playlists) = client.get_playlists() {
+                got_any = true;
+                let items: Vec<LibItem> = playlists
+                    .into_iter()
+                    .map(|p| {
+                        LibItem::ctx(
+                            p.name,
+                            format!("{} tracks", p.song_count.unwrap_or(0)),
+                            format!("subsonic:playlist:{}", p.id),
+                        )
+                    })
+                    .collect();
+                let _ = tx.send((Section::Playlists, items));
             }
-            let top_tracks = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/top/tracks?limit=10",
-                &token,
-                None,
-                1,
-                |t| track_from(t),
-            );
-            if !top_tracks.is_empty() {
-                home.push(LibItem::header("Your Top Tracks"));
-                home.extend(top_tracks.into_iter().take(8));
+
+            // 2. Liked (Starred)
+            if let Ok((songs, _, _)) = client.get_starred() {
+                got_any = true;
+                let items: Vec<LibItem> = songs
+                    .into_iter()
+                    .map(|s| {
+                        LibItem::track(
+                            s.title,
+                            s.artist.unwrap_or_default(),
+                            format!("subsonic:track:{}", s.id),
+                        )
+                    })
+                    .collect();
+                let _ = tx.send((Section::Home, items.clone()));
+                let _ = tx.send((Section::Liked, items));
             }
-            let top_artists = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/top/artists?limit=10",
-                &token,
-                None,
-                1,
-                |a| artist_from(a),
-            );
-            if !top_artists.is_empty() {
-                home.push(LibItem::header("Your Top Artists"));
-                home.extend(top_artists.into_iter().take(6));
+
+            // 3. Albums
+            if let Ok(albums) = client.get_album_list("alphabeticalByTitle", 100) {
+                got_any = true;
+                let items: Vec<LibItem> = albums
+                    .into_iter()
+                    .map(|a| {
+                        LibItem::ctx(
+                            a.name,
+                            a.artist.unwrap_or_default(),
+                            format!("subsonic:album:{}", a.id),
+                        )
+                    })
+                    .collect();
+                let _ = tx.send((Section::Albums, items));
             }
-            let new_releases = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/browse/new-releases?limit=10",
-                &token,
-                Some("albums"),
-                1,
-                |a| album_from(a),
-            );
-            if !new_releases.is_empty() {
-                home.push(LibItem::header("New Releases"));
-                home.extend(new_releases.into_iter().take(6));
+
+            // 4. Artists
+            if let Ok(artists) = client.get_artists() {
+                got_any = true;
+                let items: Vec<LibItem> = artists
+                    .into_iter()
+                    .map(|a| {
+                        LibItem::ctx(
+                            a.name,
+                            format!("{} albums", a.album_count.unwrap_or(0)),
+                            format!("subsonic:artist:{}", a.id),
+                        )
+                    })
+                    .collect();
+                let _ = tx.send((Section::Artists, items));
             }
-            got_any |= !home.is_empty();
-            liblog(format!("worker: home done, {} rows", home.len()));
-            let _ = tx.send((Section::Home, home));
 
-            let recent = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/player/recently-played?limit=50",
-                &token,
-                None,
-                1,
-                |it| track_from(&it["track"]),
-            );
-            got_any |= !recent.is_empty();
-            let _ = tx.send((Section::Recent, recent));
-
-            let playlists = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/playlists?limit=50",
-                &token,
-                None,
-                10,
-                |it| {
-                    Some(LibItem::ctx(
-                        it["name"].as_str()?.to_string(),
-                        playlist_subtitle(
-                            it["owner"]["display_name"].as_str().unwrap_or(""),
-                            playlist_total(it),
-                        ),
-                        it["uri"].as_str()?.to_string(),
-                    ))
-                },
-            );
-            got_any |= !playlists.is_empty();
-            let _ = tx.send((Section::Playlists, playlists));
-
-            let albums = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/albums?limit=50",
-                &token,
-                None,
-                10,
-                |it| album_from(&it["album"]),
-            );
-            got_any |= !albums.is_empty();
-            let _ = tx.send((Section::Albums, albums));
-
-            let artists = fetch_all_pages(
-                &client,
-                "https://api.spotify.com/v1/me/following?type=artist&limit=50",
-                &token,
-                Some("artists"),
-                5,
-                |it| artist_from(it),
-            );
-            got_any |= !artists.is_empty();
-            let _ = tx.send((Section::Artists, artists));
-
-            // Liked can be huge — stream it in as pages arrive so the count climbs live.
-            // Prepend Shuffle/Play action rows (shuffle first).
-            let mut liked: Vec<LibItem> = vec![
-                LibItem::play("▶︎  Play Liked Songs".into(), "myx:action:liked-play".into()),
-                LibItem::header("Songs"),
-            ];
-            let mut url = Some("https://api.spotify.com/v1/me/tracks?limit=50".to_string());
-            let mut pages = 0;
-            while let Some(u) = url.take() {
-                if pages >= 100 {
-                    break;
-                }
-                let Some(v) = get_json(&client, &u, &token) else {
-                    break;
-                };
-                for it in v["items"].as_array().into_iter().flatten() {
-                    if let Some(li) = track_from(&it["track"]) {
-                        liked.push(li);
-                    }
-                }
-                url = v["next"].as_str().map(String::from);
-                pages += 1;
-                if pages % 3 == 0 {
-                    let _ = tx.send((Section::Liked, liked.clone()));
-                }
-            }
-            got_any |= liked.len() > 2; // beyond the two action rows
-            let _ = tx.send((Section::Liked, liked));
-
-            liblog(format!("worker: all done got_any={got_any}"));
             let _ = done_tx.send(got_any);
         })
         .expect("spawn library worker");
@@ -2466,93 +2297,56 @@ fn fetch_all_pages(
     out
 }
 
-fn spawn_queue_fetch(webapi: Arc<Mutex<WebApi>>, tx: flume::Sender<Vec<(String, String)>>) {
-    tokio::task::spawn_blocking(move || {
-        let q = match token_of(&webapi) {
-            Some(token) => fetch_queue_blocking(&token),
-            None => Vec::new(),
-        };
-        let _ = tx.send(q);
-    });
-}
 
-/// Returns (display, uri) for each queued item.
-fn fetch_queue_blocking(token: &str) -> Vec<(String, String)> {
-    let client = http_client();
-    let Some(v) = get_json(&client, "https://api.spotify.com/v1/me/player/queue", token) else {
-        return Vec::new();
-    };
-    v["queue"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|it| {
-                    let name = it["name"].as_str()?;
-                    let uri = it["uri"].as_str()?.to_string();
-                    let artist = it["artists"][0]["name"].as_str().unwrap_or("");
-                    Some((format!("{name} — {artist}"), uri))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn fetch_track_meta(webapi: &Arc<Mutex<WebApi>>, track_id: &str) -> TrackMeta {
-    let uri = format!("spotify:track:{track_id}");
-    let empty = || TrackMeta {
-        uri: uri.clone(),
-        title: String::new(),
-        artist: String::new(),
-        album: String::new(),
-        duration_ms: 0,
-        image: None,
-        theme: None,
-    };
-    let Some(token) = token_of(webapi) else {
-        return empty();
-    };
-    let client = http_client();
-    let Some(v) = get_json(
-        &client,
-        &format!("https://api.spotify.com/v1/tracks/{track_id}"),
-        &token,
-    ) else {
-        return empty();
-    };
-
-    let title = v["name"].as_str().unwrap_or("").to_string();
-    let artist = v["artists"][0]["name"].as_str().unwrap_or("").to_string();
-    let album = v["album"]["name"].as_str().unwrap_or("").to_string();
-    let duration_ms = v["duration_ms"].as_u64().unwrap_or(0) as u32;
-    let cover_url = v["album"]["images"][0]["url"].as_str().map(String::from);
-
-    let image = cover_url.and_then(|u| {
-        let bytes = client.get(u).send().ok()?.bytes().ok()?;
-        image::load_from_memory(&bytes).ok()
-    });
-    let theme = image.as_ref().map(|img| derive_theme(img, "album ✦"));
-
-    TrackMeta {
-        uri,
-        title,
-        artist,
-        album,
-        duration_ms,
-        image,
-        theme,
-    }
-}
 
 // --- Search ---
 
-fn spawn_search(webapi: Arc<Mutex<WebApi>>, query: String, tx: flume::Sender<Vec<LibItem>>) {
-    tokio::task::spawn_blocking(move || {
-        let results = match token_of(&webapi) {
-            Some(token) => search_blocking(&token, &query),
-            None => Vec::new(),
-        };
-        let _ = tx.send(results);
-    });
+fn spawn_search(
+    subsonic: Arc<Mutex<Option<SubsonicClient>>>,
+    query: String,
+    tx: flume::Sender<Vec<LibItem>>,
+) {
+    let client_opt = subsonic.lock().unwrap().clone();
+    std::thread::Builder::new()
+        .name("myx-search".to_string())
+        .spawn(move || {
+            let Some(client) = client_opt else { return };
+            let mut results = Vec::new();
+            if let Ok((songs, albums, artists)) = client.search(&query) {
+                if !songs.is_empty() {
+                    results.push(LibItem::header("Songs"));
+                    for s in songs {
+                        results.push(LibItem::track(
+                            s.title,
+                            s.artist.unwrap_or_default(),
+                            format!("subsonic:track:{}", s.id),
+                        ));
+                    }
+                }
+                if !albums.is_empty() {
+                    results.push(LibItem::header("Albums"));
+                    for a in albums {
+                        results.push(LibItem::ctx(
+                            a.name,
+                            a.artist.unwrap_or_default(),
+                            format!("subsonic:album:{}", a.id),
+                        ));
+                    }
+                }
+                if !artists.is_empty() {
+                    results.push(LibItem::header("Artists"));
+                    for a in artists {
+                        results.push(LibItem::ctx(
+                            a.name,
+                            format!("{} albums", a.album_count.unwrap_or(0)),
+                            format!("subsonic:artist:{}", a.id),
+                        ));
+                    }
+                }
+            }
+            let _ = tx.send(results);
+        })
+        .ok();
 }
 
 fn search_blocking(token: &str, query: &str) -> Vec<LibItem> {
@@ -2728,17 +2522,47 @@ fn urlencode(s: &str) -> String {
 // --- Drill-in detail (artist / album / playlist) ---
 
 fn spawn_detail_fetch(
-    webapi: Arc<Mutex<WebApi>>,
+    subsonic: Arc<Mutex<Option<SubsonicClient>>>,
     uri: String,
     name: String,
     tx: flume::Sender<(String, String, Vec<LibItem>)>,
 ) {
-    tokio::task::spawn_blocking(move || {
-        if let Some(token) = token_of(&webapi) {
-            let (title, items) = fetch_detail_blocking(&token, &uri, &name);
-            let _ = tx.send((uri, title, items));
-        }
-    });
+    let client_opt = subsonic.lock().unwrap().clone();
+    std::thread::Builder::new()
+        .name("myx-detail".to_string())
+        .spawn(move || {
+            let Some(client) = client_opt else { return };
+            let mut items = Vec::new();
+            if let Some(id) = uri.strip_prefix("subsonic:playlist:") {
+                if let Ok(songs) = client.get_playlist_tracks(id) {
+                    items = songs
+                        .into_iter()
+                        .map(|s| {
+                            LibItem::track(
+                                s.title,
+                                s.artist.unwrap_or_default(),
+                                format!("subsonic:track:{}", s.id),
+                            )
+                        })
+                        .collect();
+                }
+            } else if let Some(id) = uri.strip_prefix("subsonic:album:") {
+                if let Ok(songs) = client.get_album_tracks(id) {
+                    items = songs
+                        .into_iter()
+                        .map(|s| {
+                            LibItem::track(
+                                s.title,
+                                s.artist.unwrap_or_default(),
+                                format!("subsonic:track:{}", s.id),
+                            )
+                        })
+                        .collect();
+                }
+            }
+            let _ = tx.send((uri, name, items));
+        })
+        .ok();
 }
 
 fn fetch_detail_blocking(token: &str, uri: &str, name: &str) -> (String, Vec<LibItem>) {
@@ -2896,24 +2720,7 @@ fn transfer_playback(token: &str, device_id: &str, play: bool) -> bool {
 
 /// Boot restore: read the live playback state, transfer it onto myx (retrying
 /// while the device registers), and hand the state back to the UI.
-fn spawn_restore(webapi: Arc<Mutex<WebApi>>, device_id: String, tx: flume::Sender<PlaybackState>) {
-    tokio::task::spawn_blocking(move || {
-        let Some(token) = token_of(&webapi) else {
-            return;
-        };
-        let Some(state) = fetch_playback_state(&token) else {
-            return;
-        };
-        // Retry the transfer — the Connect device can take a moment to appear.
-        for _ in 0..6 {
-            if transfer_playback(&token, &device_id, false) {
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-        let _ = tx.send(state);
-    });
-}
+fn spawn_restore(_subsonic: Arc<Mutex<Option<SubsonicClient>>>, _device_id: String, _tx: flume::Sender<PlaybackState>) {}
 
 // --- Live playback state (server-side) end ---
 
@@ -3009,6 +2816,10 @@ fn render(f: &mut Frame, app: &mut App) {
 
     if app.actions.is_some() {
         render_actions_overlay(f, app, theme, area);
+    }
+
+    if let Some(ref modal) = app.login_modal {
+        render_login_modal(f, modal, &theme);
     }
 }
 

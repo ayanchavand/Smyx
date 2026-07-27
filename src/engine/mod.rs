@@ -77,21 +77,21 @@ impl Engine {
 
     /// Download / stream audio from a URL, wrap it in FFT visualizer tap, and play.
     pub fn play_url(&self, stream_url: &str, track_uri: &str) -> Result<()> {
-        let req_client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(15))
+        use std::io::Read;
+        let res = ureq::get(stream_url)
+            .config()
+            .timeout_global(Some(Duration::from_secs(15)))
             .build()
-            .context("build reqwest client")?;
+            .call()
+            .map_err(|e| anyhow!("Stream request failed: {e}"))?;
 
-        let resp = req_client
-            .get(stream_url)
-            .send()
-            .context("send audio stream request")?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!("Stream request failed with HTTP {}", resp.status()));
+        let status = res.status().as_u16();
+        if status < 200 || status >= 300 {
+            return Err(anyhow!("Stream request failed with HTTP status {status}"));
         }
 
-        let bytes = resp.bytes().context("download audio stream bytes")?;
+        let mut bytes = Vec::new();
+        res.into_body().as_reader().read_to_end(&mut bytes).context("download audio stream bytes")?;
         let cursor = Cursor::new(bytes);
         let decoder = Decoder::new(cursor).context("decode audio format")?;
 
@@ -116,6 +116,10 @@ impl Engine {
         });
 
         Ok(())
+    }
+
+    pub fn play(&self) {
+        self.resume();
     }
 
     pub fn pause(&self) {
@@ -163,10 +167,58 @@ impl Engine {
         let _ = self.event_tx.send(EngineEvent::Stopped);
     }
 
+    pub fn seek(&self, _position_ms: u32) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn play_context(&self, _uri: String, _shuffle: bool) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn play_context_at(
+        &self,
+        _context_uri: String,
+        track_uri: Option<String>,
+        _position_ms: u32,
+        _shuffle: bool,
+    ) -> Result<()> {
+        if let Some(uri) = track_uri {
+            if let Some(id) = uri.strip_prefix("subsonic:track:") {
+                return self.play_track_id(id);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn play_tracks(
+        &self,
+        uris: Vec<String>,
+        track_uri: Option<String>,
+        _position_ms: u32,
+        _shuffle: bool,
+    ) -> Result<()> {
+        let target = track_uri.or_else(|| uris.first().cloned());
+        if let Some(uri) = target {
+            if let Some(id) = uri.strip_prefix("subsonic:track:") {
+                return self.play_track_id(id);
+            }
+        }
+        Ok(())
+    }
+
     pub fn set_volume(&self, volume: f32) {
         let sink = self.sink.lock().unwrap();
         sink.set_volume(volume.clamp(0.0, 1.0));
     }
+
+    pub fn set_volume_u8(&self, volume: u8) {
+        self.set_volume(volume.min(100) as f32 / 100.0);
+    }
+
+    pub fn next(&self) {}
+    pub fn prev(&self) {}
+    pub fn shuffle(&self, _shuffle: bool) {}
+    pub fn repeat(&self, _repeat: bool) {}
 
     pub fn is_playing(&self) -> bool {
         let sink = self.sink.lock().unwrap();

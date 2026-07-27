@@ -38,6 +38,7 @@ open = { version = "5", optional = true }
 fs2 = { version = "0.4", optional = true }
 toml = { version = "0.8", optional = true }
 rodio = { version = "0.21", optional = true }
+ureq = { version = "3", optional = true, features = ["json"] }
 
 # Pins librespot-core's transitive `vergen` build-dep to a working version so a
 # fresh `cargo install` (which ignores Cargo.lock) resolves correctly.
@@ -65,6 +66,7 @@ streaming = [
     "dep:fs2",
     "dep:toml",
     "dep:rodio",
+    "dep:ureq",
 ]
 
 # The one, fully-wired binary.
