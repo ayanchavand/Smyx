@@ -277,6 +277,105 @@ impl App {
         }
         Activated::None
     }
+
+    pub fn play_item(&mut self, item: &LibItem) {
+        if item.is_track {
+            if let Some(id) = item.uri.strip_prefix("subsonic:track:") {
+                if let Err(e) = self.engine.play_track_id(id) {
+                    self.status = format!("Playback error: {}", e);
+                } else {
+                    self.now = Some(NowPlaying {
+                        uri: item.uri.clone(),
+                        title: item.name.clone(),
+                        artist: item.subtitle.clone(),
+                        album: String::new(),
+                        duration_ms: 0,
+                        position_ms: 0,
+                        position_at: Instant::now(),
+                        is_playing: true,
+                        cover: None,
+                    });
+                    self.playback_started = true;
+                    self.status = format!("Playing {}", item.name);
+                }
+            }
+        }
+    }
+
+    pub fn play_next(&mut self) {
+        let items = self.cur_items().to_vec();
+        let tracks: Vec<(usize, &LibItem)> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.is_track && !i.is_header)
+            .collect();
+        if tracks.is_empty() {
+            return;
+        }
+
+        let curr_uri = self.now.as_ref().map(|n| n.uri.as_str());
+        let curr_idx = curr_uri.and_then(|uri| tracks.iter().position(|(_, item)| item.uri == uri));
+
+        let next_pos = match curr_idx {
+            Some(i) => {
+                if self.shuffle {
+                    use std::time::SystemTime;
+                    let nanos = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as usize)
+                        .unwrap_or(0);
+                    (i + 1 + nanos % (tracks.len().saturating_sub(1).max(1))) % tracks.len()
+                } else {
+                    (i + 1) % tracks.len()
+                }
+            }
+            None => tracks
+                .iter()
+                .position(|(idx, _)| *idx >= self.selected)
+                .unwrap_or(0),
+        };
+
+        let (orig_idx, item) = tracks[next_pos];
+        let item_cloned = item.clone();
+        self.selected = orig_idx;
+        self.play_item(&item_cloned);
+    }
+
+    pub fn play_prev(&mut self) {
+        if self.position_ms() > 3000 {
+            self.seek_to(0);
+            return;
+        }
+
+        let items = self.cur_items().to_vec();
+        let tracks: Vec<(usize, &LibItem)> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.is_track && !i.is_header)
+            .collect();
+        if tracks.is_empty() {
+            return;
+        }
+
+        let curr_uri = self.now.as_ref().map(|n| n.uri.as_str());
+        let curr_idx = curr_uri.and_then(|uri| tracks.iter().position(|(_, item)| item.uri == uri));
+
+        let prev_pos = match curr_idx {
+            Some(i) => {
+                if i > 0 {
+                    i - 1
+                } else {
+                    tracks.len() - 1
+                }
+            }
+            None => 0,
+        };
+
+        let (orig_idx, item) = tracks[prev_pos];
+        let item_cloned = item.clone();
+        self.selected = orig_idx;
+        self.play_item(&item_cloned);
+    }
 }
 
 pub fn context_target(item: &LibItem) -> Option<(String, String)> {

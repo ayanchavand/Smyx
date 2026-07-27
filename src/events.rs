@@ -133,10 +133,10 @@ pub fn handle_key(
             app.engine.stop();
         }
         KeyCode::Char('n') | KeyCode::Media(MediaKeyCode::TrackNext) => {
-            app.engine.next();
+            app.play_next();
         }
         KeyCode::Char('b') | KeyCode::Media(MediaKeyCode::TrackPrevious) => {
-            app.engine.prev();
+            app.play_prev();
         }
         KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Media(MediaKeyCode::RaiseVolume) => {
             app.volume = (app.volume + 5).min(100);
@@ -492,7 +492,9 @@ pub fn handle_engine_event(app: &mut App, ev: EngineEvent, meta_tx: &flume::Send
                 n.position_at = Instant::now();
             }
         }
-        EngineEvent::EndOfTrack { .. } => {}
+        EngineEvent::EndOfTrack { .. } => {
+            app.play_next();
+        }
     }
 }
 
