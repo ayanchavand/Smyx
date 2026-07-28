@@ -36,7 +36,7 @@ impl Cover {
         }
 
         // Escape hatch for mis-detected terminals.
-        if let Ok(want) = std::env::var("MYX_PROTOCOL") {
+        if let Ok(want) = std::env::var("SMYX_PROTOCOL") {
             match want.to_ascii_lowercase().as_str() {
                 "kitty" => picker.set_protocol_type(ProtocolType::Kitty),
                 "iterm2" => picker.set_protocol_type(ProtocolType::Iterm2),

@@ -1,7 +1,7 @@
-myx — Third-party attribution
+smyx — Third-party attribution
 =============================
 
-myx is an independent project, but it reuses and adapts some MIT-licensed code,
+smyx is an independent project, but it reuses and adapts some MIT-licensed code,
 and its interface is inspired by other open-source work. Credit where due:
 
 spotify-player  (https://github.com/aome510/spotify-player)
@@ -19,4 +19,4 @@ noodle  (https://github.com/wilfredinni/noodle)
     OpenTUI aesthetic. No code is shared; the theme palettes were ported as data.
 
 librespot  (https://github.com/librespot-org/librespot)
-    The Spotify Connect streaming engine myx is built on. MIT License.
+    The Spotify Connect streaming engine smyx is built on. MIT License.

@@ -1,10 +1,10 @@
-# myx
+# smyx
 
 A lean, beautiful terminal Spotify player in Rust. Streams natively as a Spotify
 Connect device, with album-art-reactive theming, a live audio visualizer, and
 synced lyrics.
 
-<p align="center"><img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/myx.png" alt="myx recolors the whole interface to the album art" width="100%"></p>
+<p align="center"><img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/myx.png" alt="smyx recolors the whole interface to the album art" width="100%"></p>
 
 <p align="center">
   <img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/theme-1.png" width="32%">
@@ -19,21 +19,21 @@ synced lyrics.
 
 ```bash
 # Arch (AUR)
-yay -S myx
+yay -S smyx
 
 # macOS / Linux (Homebrew)
-brew install HaseebKhalid1507/homebrew-tap/myx
+brew install HaseebKhalid1507/homebrew-tap/smyx
 
 # Cargo (all platforms — Linux, macOS, Windows)
-cargo install myx
+cargo install smyx
 
 # Prebuilt binary (Linux x86_64, macOS)
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/HaseebKhalid1507/Myx/releases/latest/download/myx-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/HaseebKhalid1507/Myx/releases/latest/download/smyx-installer.sh | sh
 ```
 
-On **Windows**, install [Rust](https://rustup.rs) first, then `cargo install myx` in
-PowerShell. Set `MYX_CLIENT_ID` as an environment variable or place your client ID in
-`%USERPROFILE%\.config\myx\client_id`.
+On **Windows**, install [Rust](https://rustup.rs) first, then `cargo install smyx` in
+PowerShell. Set `SMYX_CLIENT_ID` as an environment variable or place your client ID in
+`%USERPROFILE%\.config\smyx\client_id`.
 
 Or grab a `.deb` / archive from [Releases](https://github.com/HaseebKhalid1507/Myx/releases),
 or build from source: `cargo install --path .`.
@@ -47,17 +47,17 @@ You need a free Spotify app client ID (one minute):
 3. Copy the **Client ID** and set it:
 
 ```bash
-export MYX_CLIENT_ID=<your-client-id>
+export SMYX_CLIENT_ID=<your-client-id>
 ```
 
 Then run:
 
 ```bash
-myx
+smyx
 ```
 
 First launch opens your browser to log in (OAuth PKCE, no secret needed). Then
-browse with `↑↓` and hit `⏎` to play. After that, just `myx`.
+browse with `↑↓` and hit `⏎` to play. After that, just `smyx`.
 
 ## Keys
 

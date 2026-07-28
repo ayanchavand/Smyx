@@ -1,18 +1,18 @@
-//! Asynchronous background tasks and utility routines for Myx.
+//! Asynchronous background tasks and utility routines for Smyx.
 
 use std::sync::{Arc, Mutex};
 use crate::models::{LibItem, Section};
 use crate::subsonic::SubsonicClient;
 
-/// Optional debug log — silent unless `MYX_LOG` is set. Writes to
-/// ~/.cache/myx/myx.log instead of a fixed /tmp path.
+/// Optional debug log — silent unless `SMYX_LOG` is set. Writes to
+/// ~/.cache/smyx/smyx.log instead of a fixed /tmp path.
 pub fn liblog(msg: impl AsRef<str>) {
     use std::io::Write;
-    if std::env::var_os("MYX_LOG").is_none() {
+    if std::env::var_os("SMYX_LOG").is_none() {
         return;
     }
     let Some(home) = crate::home_dir() else { return };
-    let dir = home.join(".cache/myx");
+    let dir = home.join(".cache/smyx");
     if std::fs::create_dir_all(&dir).is_ok() {
         #[cfg(unix)]
         {
@@ -27,7 +27,7 @@ pub fn liblog(msg: impl AsRef<str>) {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    if let Ok(mut f) = opts.open(dir.join("myx.log")) {
+    if let Ok(mut f) = opts.open(dir.join("smyx.log")) {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -45,7 +45,7 @@ pub fn spawn_library_fetch(
 ) {
     let client_opt = subsonic.lock().unwrap().clone();
     std::thread::Builder::new()
-        .name("myx-library".to_string())
+        .name("smyx-library".to_string())
         .spawn(move || {
             let Some(client) = client_opt else {
                 let _ = done_tx.send(false);
@@ -150,7 +150,7 @@ pub fn spawn_search(
 ) {
     let client_opt = subsonic.lock().unwrap().clone();
     std::thread::Builder::new()
-        .name("myx-search".to_string())
+        .name("smyx-search".to_string())
         .spawn(move || {
             let Some(client) = client_opt else { return };
             let mut results = Vec::new();
@@ -207,7 +207,7 @@ pub fn fetch_lyrics_blocking(
         duration_ms / 1000
     );
     let Ok(res) = ureq::get(&url)
-        .header("User-Agent", "myx (terminal player)")
+        .header("User-Agent", "smyx (terminal player)")
         .call()
     else {
         return (Vec::new(), false);
@@ -289,7 +289,7 @@ pub fn spawn_detail_fetch(
 ) {
     let client_opt = subsonic.lock().unwrap().clone();
     std::thread::Builder::new()
-        .name("myx-detail".to_string())
+        .name("smyx-detail".to_string())
         .spawn(move || {
             let Some(client) = client_opt else { return };
             let mut items = Vec::new();

@@ -409,13 +409,13 @@ jobs:
           echo -e "Host aur.archlinux.org\n  IdentityFile ~/.ssh/aur\n  User aur" >> ~/.ssh/config
           ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
 
-          git clone ssh://aur@aur.archlinux.org/myx.git /tmp/aur-myx || \
-            git clone ssh://aur@aur.archlinux.org/myx.git /tmp/aur-myx
-          cd /tmp/aur-myx
+          git clone ssh://aur@aur.archlinux.org/smyx.git /tmp/aur-smyx || \
+            git clone ssh://aur@aur.archlinux.org/smyx.git /tmp/aur-smyx
+          cd /tmp/aur-smyx
 
           cat > PKGBUILD << PKG
           # Maintainer: Haseeb Khalid <haseebkhalid1507@gmail.com>
-          pkgname=myx
+          pkgname=smyx
           pkgver=${VERSION}
           pkgrel=1
           pkgdesc="A lean, beautiful terminal Spotify player"
@@ -443,13 +443,13 @@ jobs:
 
           package() {
             cd "Myx-\$pkgver"
-            install -Dm755 "target/release/myx" "\$pkgdir/usr/bin/myx"
+            install -Dm755 "target/release/smyx" "\$pkgdir/usr/bin/smyx"
             install -Dm644 LICENSE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
           }
           PKG
 
           cat > .SRCINFO << SRC
-          pkgbase = myx
+          pkgbase = smyx
           	pkgdesc = A lean, beautiful terminal Spotify player
           	pkgver = ${VERSION}
           	pkgrel = 1
@@ -467,7 +467,7 @@ jobs:
           	source = https://github.com/HaseebKhalid1507/Myx/archive/refs/tags/v${VERSION}.tar.gz
           	sha256sums = ${SHA256}
 
-          pkgname = myx
+          pkgname = smyx
           SRC
 
           git config user.name "Haseeb Khalid"

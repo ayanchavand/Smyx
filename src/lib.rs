@@ -1,4 +1,4 @@
-//! myx — a lean, beautiful terminal Navidrome / OpenSubsonic player.
+//! smyx — a lean, beautiful terminal Navidrome / OpenSubsonic player.
 //!
 //! FE: the design-token system (noodle's visual language) ported to ratatui,
 //! plus album-art-reactive theming with cross-fades.

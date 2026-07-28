@@ -1,4 +1,4 @@
-//! Keyboard, mouse, and engine event processing for Myx.
+//! Keyboard, mouse, and engine event processing for Smyx.
 
 use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};

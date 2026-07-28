@@ -1,4 +1,4 @@
-//! myx — a lean, beautiful terminal Navidrome / OpenSubsonic player.
+//! smyx — a lean, beautiful terminal Navidrome / OpenSubsonic player.
 
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -15,23 +15,23 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use myx::app::App;
-use myx::config::NavidromeConfig;
-use myx::cover::Cover;
-use myx::engine::{Engine, EngineEvent};
-use myx::events::{advance_fade, handle_engine_event, handle_key, save_state};
-use myx::login_modal::LoginModalState;
-use myx::models::{LibItem, SavedState, Section, TrackMeta};
-use myx::subsonic::SubsonicClient;
-use myx::tasks::{liblog, spawn_library_fetch};
-use myx::theme::TOKYONIGHT;
-use myx::ui::{render, Term};
+use smyx::app::App;
+use smyx::config::NavidromeConfig;
+use smyx::cover::Cover;
+use smyx::engine::{Engine, EngineEvent};
+use smyx::events::{advance_fade, handle_engine_event, handle_key, save_state};
+use smyx::login_modal::LoginModalState;
+use smyx::models::{LibItem, SavedState, Section, TrackMeta};
+use smyx::subsonic::SubsonicClient;
+use smyx::tasks::{liblog, spawn_library_fetch};
+use smyx::theme::TOKYONIGHT;
+use smyx::ui::{render, Term};
 
 fn acquire_single_instance_lock() -> std::fs::File {
     use fs2::FileExt;
-    let path = myx::home_dir()
-        .map(|h| h.join(".cache/myx/lock"))
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/myx.lock"));
+    let path = smyx::home_dir()
+        .map(|h| h.join(".cache/smyx/lock"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/smyx.lock"));
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -42,7 +42,7 @@ fn acquire_single_instance_lock() -> std::fs::File {
         .open(&path)
         .expect("open lock file");
     if file.try_lock_exclusive().is_err() {
-        eprintln!("myx is already running (another instance holds the lock).");
+        eprintln!("smyx is already running (another instance holds the lock).");
         eprintln!(
             "Close it first, or remove {} if it's stale.",
             path.display()
@@ -235,7 +235,7 @@ async fn run_ui(
 
         while let Ok((_uri, title, items)) = detail_rx.try_recv() {
             let parent_sel = app.selected;
-            app.details.push(myx::models::Detail {
+            app.details.push(smyx::models::Detail {
                 title,
                 items,
                 parent_selected: parent_sel,
@@ -252,7 +252,7 @@ async fn run_ui(
         }
 
         while let Ok(meta) = meta_rx.try_recv() {
-            myx::events::apply_meta(app, meta, &lyrics_tx);
+            smyx::events::apply_meta(app, meta, &lyrics_tx);
         }
 
         while let Ok((lines, synced)) = lyrics_rx.try_recv() {
@@ -306,9 +306,9 @@ async fn run_ui(
 
 #[cfg(test)]
 mod tests {
-    use myx::app::{context_target, enter_label};
-    use myx::models::LibItem;
-    use myx::tasks::{parse_lrc, parse_lrc_stamp, urlencode};
+    use smyx::app::{context_target, enter_label};
+    use smyx::models::LibItem;
+    use smyx::tasks::{parse_lrc, parse_lrc_stamp, urlencode};
 
     #[test]
     fn test_context_target() {

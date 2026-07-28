@@ -1,4 +1,4 @@
-//! UI rendering module for Myx.
+//! UI rendering module for Smyx.
 
 pub mod library;
 pub mod lyrics;
@@ -40,7 +40,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     .split(area);
 
     let mut header: Vec<Span> =
-        gradient_line("\u{FF2D}\u{FF39}\u{FF38}", &[theme.primary, theme.accent])
+        gradient_line("\u{FF33}\u{FF2D}\u{FF39}\u{FF38}", &[theme.primary, theme.accent])
             .into_iter()
             .map(|mut sp| {
                 sp.style = sp.style.add_modifier(Modifier::BOLD);

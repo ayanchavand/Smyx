@@ -1,4 +1,4 @@
-//! Data models and domain types for Myx.
+//! Data models and domain types for Smyx.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -328,7 +328,7 @@ pub enum PlaySource {
     Liked,
 }
 
-/// Persisted across sessions (~/.cache/myx/state.json).
+/// Persisted across sessions (~/.cache/smyx/state.json).
 #[derive(Default, Serialize, Deserialize)]
 pub struct SavedState {
     pub volume: u8,
@@ -359,7 +359,7 @@ pub struct LastPlayed {
 
 impl SavedState {
     pub fn path() -> Option<PathBuf> {
-        Some(crate::home_dir()?.join(".cache/myx/state.json"))
+        Some(crate::home_dir()?.join(".cache/smyx/state.json"))
     }
 
     pub fn load() -> SavedState {

@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::config::NavidromeConfig;
 
 pub const SUBSONIC_VERSION: &str = "1.16.1";
-pub const CLIENT_NAME: &str = "myx";
+pub const CLIENT_NAME: &str = "smyx";
 
 #[derive(Debug, Clone)]
 pub struct SubsonicClient {
@@ -511,7 +511,7 @@ mod tests {
         assert!(url.contains("u=admin"));
         assert!(url.contains("p=secret123"));
         assert!(url.contains("v=1.16.1"));
-        assert!(url.contains("c=myx"));
+        assert!(url.contains("c=smyx"));
         assert!(url.contains("f=json"));
         assert!(url.contains("foo=bar"));
     }

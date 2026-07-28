@@ -1,7 +1,7 @@
 //! Print the theme derived from assets/cover.jpg as hex, so we can inspect the
 //! reactive derivation without opening a TUI.
-use myx::gradient::Rgb;
-use myx::reactive::derive_theme;
+use smyx::gradient::Rgb;
+use smyx::reactive::derive_theme;
 
 fn hex(c: Rgb) -> String { format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b) }
 

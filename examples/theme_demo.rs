@@ -1,4 +1,4 @@
-//! Live showcase of the myx design system.
+//! Live showcase of the smyx design system.
 //!
 //! Cycles themes with ←/→ (or h/l), quits with q/Esc. Renders a mock now-playing
 //! surface using every primitive: 3-layer backgrounds, left-bar focus, pills,
@@ -19,11 +19,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{Frame, Terminal};
 
-use myx::anim::ThemeFade;
-use myx::components::{gradient_line, gradient_pill, gradient_progress, left_bar_block, pill};
-use myx::cover::Cover;
-use myx::reactive::derive_theme;
-use myx::theme::{Theme, THEMES};
+use smyx::anim::ThemeFade;
+use smyx::components::{gradient_line, gradient_pill, gradient_progress, left_bar_block, pill};
+use smyx::cover::Cover;
+use smyx::reactive::derive_theme;
+use smyx::theme::{Theme, THEMES};
 
 struct App {
     themes: Vec<Theme>,

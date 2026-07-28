@@ -1,6 +1,6 @@
 //! Navidrome / OpenSubsonic configuration management.
 //!
-//! Stores server URL, username, and password in `~/.config/myx/navidrome.toml`.
+//! Stores server URL, username, and password in `~/.config/smyx/navidrome.toml`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ impl NavidromeConfig {
     }
 
     pub fn config_path() -> Option<PathBuf> {
-        crate::home_dir().map(|h| h.join(".config/myx/navidrome.toml"))
+        crate::home_dir().map(|h| h.join(".config/smyx/navidrome.toml"))
     }
 
     pub fn load() -> Option<Self> {

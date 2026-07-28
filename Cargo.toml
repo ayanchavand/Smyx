@@ -1,5 +1,5 @@
 [package]
-name = "myx"
+name = "smyx"
 version = "0.2.5"
 edition = "2021"
 description = "A lean, beautiful terminal Navidrome / OpenSubsonic player"
@@ -10,7 +10,7 @@ homepage = "https://github.com/HaseebKhalid1507/Myx"
 readme = "README.md"
 keywords = ["navidrome", "subsonic", "tui", "music", "player", "ratatui"]
 categories = ["command-line-utilities", "multimedia::audio"]
-default-run = "myx"
+default-run = "smyx"
 
 [dependencies]
 ratatui = "0.30.2"
@@ -19,7 +19,7 @@ ratatui-image = { version = "11.0.6", default-features = false, features = ["cro
 image = "0.25"
 color-thief = "0.2"
 
-# --- streaming backend (on by default; the single `myx` binary needs it) ---
+# --- streaming backend (on by default; the single `smyx` binary needs it) ---
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 flume = { version = "0.12", optional = true }
 rustfft = { version = "6", optional = true }
@@ -48,7 +48,7 @@ streaming = [
 
 # The one, fully-wired binary.
 [[bin]]
-name = "myx"
+name = "smyx"
 path = "src/main.rs"
 
 # Dev tools, kept as examples (cargo run --example theme_demo).
@@ -71,8 +71,8 @@ lto = "thin"
 section = "sound"
 priority = "optional"
 assets = [
-    ["target/release/myx", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/myx/README.md", "644"],
-    ["LICENSE", "usr/share/doc/myx/LICENSE", "644"],
-    ["NOTICE", "usr/share/doc/myx/NOTICE", "644"],
+    ["target/release/smyx", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/smyx/README.md", "644"],
+    ["LICENSE", "usr/share/doc/smyx/LICENSE", "644"],
+    ["NOTICE", "usr/share/doc/smyx/NOTICE", "644"],
 ]

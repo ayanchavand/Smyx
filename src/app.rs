@@ -239,7 +239,7 @@ impl App {
             return Activated::None;
         }
         if item.is_play {
-            if item.uri == "myx:action:liked-play" {
+            if item.uri == "smyx:action:liked-play" {
                 let uris: Vec<String> = self
                     .library
                     .liked
