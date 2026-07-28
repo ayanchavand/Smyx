@@ -88,12 +88,31 @@ pub struct SubsonicPlaylist {
 #[derive(Debug, Deserialize, Clone)]
 pub struct SubsonicAlbum {
     pub id: String,
-    pub name: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
     pub artist: Option<String>,
     #[serde(rename = "songCount")]
     pub song_count: Option<u32>,
     #[serde(rename = "coverArt")]
     pub cover_art: Option<String>,
+}
+
+impl SubsonicAlbum {
+    pub fn display_name(&self) -> String {
+        if let Some(ref n) = self.name {
+            if !n.is_empty() {
+                return n.clone();
+            }
+        }
+        if let Some(ref t) = self.title {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        "Untitled Album".to_string()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -149,9 +168,11 @@ pub struct Starred2Container {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AlbumList2Data {
+pub struct AlbumListData {
     #[serde(rename = "albumList2")]
     pub album_list2: Option<AlbumList2Container>,
+    #[serde(rename = "albumList")]
+    pub album_list: Option<AlbumList2Container>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -336,16 +357,18 @@ impl SubsonicClient {
     /// Fetch albums list.
     pub fn get_album_list(&self, list_type: &str, size: usize) -> Result<Vec<SubsonicAlbum>> {
         let sz_str = size.to_string();
-        if let Ok(data) = self.get_json::<AlbumList2Data>("getAlbumList2.view", &[("type", list_type), ("size", &sz_str)]) {
-            if let Some(a) = data.album_list2 {
-                if !a.album.is_empty() {
-                    return Ok(a.album);
+        let types = [list_type, "newest", "frequent", "alphabeticalByName", "random"];
+        for t in types {
+            for endpoint in ["getAlbumList2.view", "getAlbumList.view"] {
+                if let Ok(data) = self.get_json::<AlbumListData>(endpoint, &[("type", t), ("size", &sz_str)]) {
+                    let albums = data.album_list2
+                        .or(data.album_list)
+                        .map(|c| c.album)
+                        .unwrap_or_default();
+                    if !albums.is_empty() {
+                        return Ok(albums);
+                    }
                 }
-            }
-        }
-        if let Ok(data) = self.get_json::<AlbumList2Data>("getAlbumList.view", &[("type", list_type), ("size", &sz_str)]) {
-            if let Some(a) = data.album_list2 {
-                return Ok(a.album);
             }
         }
         Ok(vec![])
@@ -391,7 +414,8 @@ impl SubsonicClient {
                         let name = c.display_title();
                         SubsonicAlbum {
                             id: c.id,
-                            name,
+                            name: Some(name),
+                            title: None,
                             artist: c.artist,
                             song_count: None,
                             cover_art: c.cover_art,

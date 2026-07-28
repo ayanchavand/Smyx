@@ -93,8 +93,9 @@ pub fn spawn_library_fetch(
                 let items: Vec<LibItem> = albums
                     .into_iter()
                     .map(|a| {
+                        let name = a.display_name();
                         LibItem::ctx(
-                            a.name,
+                            name,
                             a.artist.unwrap_or_default(),
                             format!("subsonic:album:{}", a.id),
                         )
@@ -150,8 +151,9 @@ pub fn spawn_search(
                 if !albums.is_empty() {
                     results.push(LibItem::header("Albums"));
                     for a in albums {
+                        let name = a.display_name();
                         results.push(LibItem::ctx(
-                            a.name,
+                            name,
                             a.artist.unwrap_or_default(),
                             format!("subsonic:album:{}", a.id),
                         ));
@@ -307,8 +309,9 @@ pub fn spawn_detail_fetch(
                     items = albums
                         .into_iter()
                         .map(|a| {
+                            let name = a.display_name();
                             LibItem::ctx(
-                                a.name,
+                                name,
                                 a.artist.unwrap_or_default(),
                                 format!("subsonic:album:{}", a.id),
                             )
