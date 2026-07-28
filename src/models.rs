@@ -237,6 +237,9 @@ pub enum ActionKind {
     UnstarTrack {
         track_uri: String,
     },
+    PlayNext {
+        uri: String,
+    },
 }
 
 pub struct ActionItem {

@@ -320,16 +320,16 @@ pub fn handle_action_key(
             };
             app.actions = None;
         }
-        ActionKind::Queue { uri } => {
+        ActionKind::Queue { uri } | ActionKind::PlayNext { uri } => {
             let label = app
                 .cur_items()
                 .iter()
                 .find(|i| i.uri == uri)
                 .map(|i| i.name.clone())
                 .unwrap_or_else(|| uri.clone());
-            app.queue.push(label.clone());
-            app.queue_uris.push(uri);
-            app.status = format!("queued {}", label);
+            app.queue.insert(0, label.clone());
+            app.queue_uris.insert(0, uri);
+            app.status = format!("queued next: {}", label);
             app.actions = None;
         }
         ActionKind::AddToPlaylist { playlist_id, track_uri } => {

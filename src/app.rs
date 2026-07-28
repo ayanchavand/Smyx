@@ -302,10 +302,16 @@ impl App {
                 if let Err(e) = self.engine.play_track_id(id) {
                     self.status = format!("Playback error: {}", e);
                 } else {
-                    if self.section == Section::Liked && self.details.is_empty() {
-                        self.source = PlaySource::Liked;
-                        self.source_name = "Liked Songs".to_string();
-                    }
+                    let source_name = if let Some(d) = self.details.last() {
+                        d.title.clone()
+                    } else if self.searching {
+                        format!("Search: {}", self.query)
+                    } else {
+                        self.section.label().to_string()
+                    };
+                    self.source = PlaySource::Context(item.uri.clone());
+                    self.source_name = source_name;
+
                     self.now = Some(NowPlaying {
                         uri: item.uri.clone(),
                         title: item.name.clone(),
@@ -319,6 +325,29 @@ impl App {
                     });
                     self.playback_started = true;
                     self.status = format!("Playing {}", item.name);
+
+                    let cur_items = self.cur_items().to_vec();
+                    if let Some(pos) = cur_items.iter().position(|i| i.uri == item.uri) {
+                        let mut remaining: Vec<LibItem> = cur_items[pos + 1..]
+                            .iter()
+                            .filter(|i| i.is_track && !i.is_header)
+                            .cloned()
+                            .collect();
+                        if self.shuffle {
+                            use std::time::SystemTime;
+                            let nanos = SystemTime::now()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .map(|d| d.subsec_nanos() as usize)
+                                .unwrap_or(0);
+                            let len = remaining.len();
+                            for i in (1..len).rev() {
+                                let j = (nanos + i * 31) % (i + 1);
+                                remaining.swap(i, j);
+                            }
+                        }
+                        self.queue_uris = remaining.iter().map(|i| i.uri.clone()).collect();
+                        self.queue = remaining.iter().map(|i| i.name.clone()).collect();
+                    }
                 }
             }
             return Activated::None;
