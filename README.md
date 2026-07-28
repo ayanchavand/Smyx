@@ -1,5 +1,10 @@
 # smyx
 
+[![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
+[![Crates.io Version](https://img.shields.io/crates/v/smyx?style=for-the-badge)](https://crates.io/crates/smyx)
+![GitHub Release](https://img.shields.io/github/v/release/ayanchavand/Smyx?style=for-the-badge)
+![Last Commit](https://img.shields.io/github/last-commit/ayanchavand/Smyx?style=for-the-badge)
+
 A lean, beautiful terminal Navidrome / OpenSubsonic player in Rust. Features
 album-art-reactive theming, a live audio visualizer, and synced lyrics.
 
@@ -25,8 +30,8 @@ cargo install smyx
 Or build from source:
 
 ```bash
-git clone https://github.com/HaseebKhalid1507/Myx.git
-cd Myx
+git clone https://github.com/ayanchavand/Smyx.git
+cd Smyx
 cargo install --path .
 ```
 
@@ -45,14 +50,14 @@ Configurations are automatically saved to `~/.config/smyx/navidrome.toml` (or `%
 ## Keys
 
 ```
-⇥ / [ ]    switch section        ← →      switch view
+⇥ / [ ]    switch section        ⇧⇥       switch view
 ↑↓ / j k   move                  ⏎        play / open
 /          search                a        actions
 space      play · pause          n / b    next · prev
-⇧ ← →      seek                  s        shuffle
+← →        seek                  s        shuffle
 + / -      volume                R        repeat
 o          sort                  r        reload
-q          quit
+t          theme                 q        quit
 ```
 
 Media keys (Play/Pause, Stop, Next, Prev, Volume) work when the terminal is

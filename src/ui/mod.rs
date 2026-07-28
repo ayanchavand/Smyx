@@ -110,7 +110,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 }
 
 fn view_tabs<'a>(app: &App, theme: Theme) -> Vec<Span<'a>> {
-    let mut spans = vec![Span::styled("←→ ", theme.muted())];
+    let mut spans = vec![Span::styled("⇧⇥ ", theme.muted())];
     for (i, v) in RightView::ALL.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" · ", theme.muted()));
