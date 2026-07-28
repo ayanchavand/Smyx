@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui_image::picker::Picker;
 
 use crate::anim::ThemeFade;
+use crate::cover::Cover;
 use crate::engine::Engine;
 use crate::login_modal::LoginModalState;
 use crate::models::{
@@ -58,6 +59,8 @@ pub struct App {
     pub lib_rect: Option<Rect>,
     pub lib_offset: usize,
     pub last_click: Option<(u16, Instant)>,
+    pub selected_cover: Option<(String, Cover)>,
+    pub selected_cover_uri: Option<String>,
 }
 
 impl App {
@@ -111,6 +114,8 @@ impl App {
             lib_rect: None,
             lib_offset: 0,
             last_click: None,
+            selected_cover: None,
+            selected_cover_uri: None,
         }
     }
 

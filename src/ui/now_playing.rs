@@ -14,6 +14,77 @@ use crate::ui::{center_v, fmt_ms, truncate};
 
 pub fn render_nowplaying_view(f: &mut Frame, app: &mut App, theme: Theme, area: Rect) {
     if app.now.is_none() {
+        let sel_item = app.cur_items().get(app.selected).cloned();
+        if let Some(item) = sel_item.filter(|i| !i.is_header) {
+            let chunks = Layout::vertical([
+                Constraint::Min(6),
+                Constraint::Length(7),
+                Constraint::Length(2),
+            ])
+            .split(area);
+            let top = chunks[0];
+            let top = Rect {
+                x: top.x,
+                y: top.y + 3,
+                width: top.width,
+                height: top.height.saturating_sub(3),
+            };
+
+            let font = app.picker.font_size();
+            let fw = font.width.max(1) as u32;
+            let fh = font.height.max(1) as u32;
+
+            let avail_h = top.height.saturating_sub(4);
+            let mut art_h = avail_h.clamp(3, 14);
+            let mut art_w = (art_h as u32 * fh / fw) as u16;
+            if art_w > top.width {
+                art_w = top.width;
+                art_h = (art_w as u32 * fw / fh) as u16;
+            }
+
+            let group_h = art_h + 4;
+            let art_y = top.y + top.height.saturating_sub(group_h) / 2;
+            let art_x = top.x + top.width.saturating_sub(art_w) / 2;
+            let art_rect = Rect {
+                x: art_x,
+                y: art_y,
+                width: art_w,
+                height: art_h,
+            };
+
+            if let Some((ref uri, cover)) = app.selected_cover.as_mut() {
+                if uri == &item.uri {
+                    f.render_widget(Clear, art_rect);
+                    cover.render(f, art_rect);
+                }
+            }
+
+            let text_rect = Rect {
+                x: top.x,
+                y: art_rect.y + art_h + 1,
+                width: top.width,
+                height: 3,
+            };
+            let lines = vec![
+                Line::from(Span::styled(
+                    truncate(&item.name, top.width as usize),
+                    Style::default()
+                        .fg(theme.text.into())
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    truncate(&item.subtitle, top.width as usize),
+                    Style::default().fg(theme.primary.into()),
+                )),
+                Line::from(Span::styled("Press Enter to Play", theme.muted())),
+            ];
+            f.render_widget(
+                Paragraph::new(lines).alignment(Alignment::Center),
+                text_rect,
+            );
+            return;
+        }
+
         f.render_widget(
             Paragraph::new("Nothing playing.\nBrowse ← and press Enter.")
                 .style(theme.muted())

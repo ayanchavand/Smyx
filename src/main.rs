@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
     let (meta_tx, meta_rx) = flume::unbounded::<TrackMeta>();
     let (lyrics_tx, lyrics_rx) = flume::unbounded::<(Vec<(u32, String)>, bool)>();
     let (login_tx, login_rx) = flume::unbounded::<Result<(SubsonicClient, NavidromeConfig), String>>();
+    let (sel_cover_tx, sel_cover_rx) = flume::unbounded::<(String, image::DynamicImage)>();
 
     let config_opt = NavidromeConfig::load();
     let initial_client = config_opt.as_ref().map(|c| SubsonicClient::new(c.clone()));
@@ -183,6 +184,8 @@ async fn main() -> Result<()> {
         lyrics_rx,
         login_tx,
         login_rx,
+        sel_cover_tx,
+        sel_cover_rx,
     )
     .await;
 
@@ -211,6 +214,8 @@ async fn run_ui(
     lyrics_rx: flume::Receiver<(Vec<(u32, String)>, bool)>,
     login_tx: flume::Sender<Result<(SubsonicClient, NavidromeConfig), String>>,
     login_rx: flume::Receiver<Result<(SubsonicClient, NavidromeConfig), String>>,
+    sel_cover_tx: flume::Sender<(String, image::DynamicImage)>,
+    sel_cover_rx: flume::Receiver<(String, image::DynamicImage)>,
 ) -> Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(33));
 
@@ -276,6 +281,43 @@ async fn run_ui(
                 Err(err_msg) => {
                     if let Some(ref mut modal) = app.login_modal {
                         modal.error_message = Some(err_msg);
+                    }
+                }
+            }
+        }
+
+        while let Ok((uri, img)) = sel_cover_rx.try_recv() {
+            let cover = smyx::cover::Cover::from_image(img, app.picker.clone());
+            app.selected_cover = Some((uri, cover));
+        }
+
+        if app.now.is_none() {
+            if let Some(item) = app.cur_items().get(app.selected).cloned() {
+                if item.is_track {
+                    if app.selected_cover_uri.as_deref() != Some(&item.uri) {
+                        app.selected_cover_uri = Some(item.uri.clone());
+                        if let Some(id) = item.uri.strip_prefix("subsonic:track:") {
+                            let subsonic = app.subsonic.clone();
+                            let tx = sel_cover_tx.clone();
+                            let uri = item.uri.clone();
+                            let track_id = id.to_string();
+                            tokio::task::spawn_blocking(move || {
+                                let client_opt = subsonic.lock().unwrap().clone();
+                                if let Some(client) = client_opt {
+                                    let mut cover_id = track_id.clone();
+                                    if let Ok(song) = client.get_song(&track_id) {
+                                        if let Some(c) = song.cover_art {
+                                            cover_id = c;
+                                        }
+                                    }
+                                    if let Ok(cover_bytes) = client.get_cover_art(&cover_id) {
+                                        if let Ok(img) = image::load_from_memory(&cover_bytes) {
+                                            let _ = tx.send((uri, img));
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
