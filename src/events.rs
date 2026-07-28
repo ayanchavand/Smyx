@@ -214,19 +214,16 @@ pub fn handle_key(
             app.section = app.section.shift(1);
             app.selected = app.first_selectable();
         }
-        KeyCode::BackTab | KeyCode::Char('[') => {
+        KeyCode::BackTab => {
+            app.view = app.view.shift(1);
+        }
+        KeyCode::Char('[') => {
             app.searching = false;
             app.section = app.section.shift(-1);
             app.selected = app.first_selectable();
         }
-        KeyCode::Right if mods.contains(KeyModifiers::SHIFT) => app.seek_by(5_000),
-        KeyCode::Left if mods.contains(KeyModifiers::SHIFT) => app.seek_by(-5_000),
-        KeyCode::Right => {
-            app.view = app.view.shift(1);
-        }
-        KeyCode::Left => {
-            app.view = app.view.shift(-1);
-        }
+        KeyCode::Right => app.seek_by(5_000),
+        KeyCode::Left => app.seek_by(-5_000),
         KeyCode::Down | KeyCode::Char('j') => app.move_sel(1),
         KeyCode::Up | KeyCode::Char('k') => app.move_sel(-1),
         KeyCode::Enter => match app.activate() {
