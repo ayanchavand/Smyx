@@ -77,7 +77,7 @@ pub fn spawn_library_fetch(
                     .into_iter()
                     .map(|s| {
                         LibItem::track(
-                            s.title,
+                            s.display_title(),
                             s.artist.unwrap_or_default(),
                             format!("subsonic:track:{}", s.id),
                         )
@@ -141,7 +141,7 @@ pub fn spawn_search(
                     results.push(LibItem::header("Songs"));
                     for s in songs {
                         results.push(LibItem::track(
-                            s.title,
+                            s.display_title(),
                             s.artist.unwrap_or_default(),
                             format!("subsonic:track:{}", s.id),
                         ));
@@ -279,8 +279,9 @@ pub fn spawn_detail_fetch(
                     items = songs
                         .into_iter()
                         .map(|s| {
+                            let title = s.display_title();
                             LibItem::track(
-                                s.title,
+                                title,
                                 s.artist.unwrap_or_default(),
                                 format!("subsonic:track:{}", s.id),
                             )
@@ -292,10 +293,24 @@ pub fn spawn_detail_fetch(
                     items = songs
                         .into_iter()
                         .map(|s| {
+                            let title = s.display_title();
                             LibItem::track(
-                                s.title,
+                                title,
                                 s.artist.unwrap_or_default(),
                                 format!("subsonic:track:{}", s.id),
+                            )
+                        })
+                        .collect();
+                }
+            } else if let Some(id) = uri.strip_prefix("subsonic:artist:") {
+                if let Ok(albums) = client.get_artist_albums(id) {
+                    items = albums
+                        .into_iter()
+                        .map(|a| {
+                            LibItem::ctx(
+                                a.name,
+                                a.artist.unwrap_or_default(),
+                                format!("subsonic:album:{}", a.id),
                             )
                         })
                         .collect();

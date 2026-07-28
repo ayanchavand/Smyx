@@ -455,7 +455,7 @@ pub fn handle_engine_event(app: &mut App, ev: EngineEvent, meta_tx: &flume::Send
                         let mut cover_id = track_id.clone();
 
                         if let Ok(song) = client.get_song(&track_id) {
-                            title = song.title;
+                            title = song.display_title();
                             artist = song.artist.unwrap_or_default();
                             album = song.album.unwrap_or_default();
                             duration_ms = song.duration.map(|d| d * 1000).unwrap_or(0);

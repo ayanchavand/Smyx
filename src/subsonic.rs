@@ -49,12 +49,31 @@ pub struct PingData {}
 #[derive(Debug, Deserialize, Clone)]
 pub struct SubsonicSong {
     pub id: String,
-    pub title: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
     pub duration: Option<u32>,
     #[serde(rename = "coverArt")]
     pub cover_art: Option<String>,
+}
+
+impl SubsonicSong {
+    pub fn display_title(&self) -> String {
+        if let Some(ref t) = self.title {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        if let Some(ref n) = self.name {
+            if !n.is_empty() {
+                return n.clone();
+            }
+        }
+        "Untitled Track".to_string()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -150,6 +169,30 @@ pub struct AlbumDetailData {
 pub struct AlbumDetailContainer {
     #[serde(default)]
     pub song: Vec<SubsonicSong>,
+    #[serde(default)]
+    pub entry: Vec<SubsonicSong>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoryData {
+    pub directory: Option<DirectoryContainer>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoryContainer {
+    #[serde(default)]
+    pub child: Vec<SubsonicSong>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArtistDetailData {
+    pub artist: Option<ArtistDetailContainer>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArtistDetailContainer {
+    #[serde(default)]
+    pub album: Vec<SubsonicAlbum>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,14 +336,72 @@ impl SubsonicClient {
     /// Fetch albums list.
     pub fn get_album_list(&self, list_type: &str, size: usize) -> Result<Vec<SubsonicAlbum>> {
         let sz_str = size.to_string();
-        let data: AlbumList2Data = self.get_json("getAlbumList2.view", &[("type", list_type), ("size", &sz_str)])?;
-        Ok(data.album_list2.map(|a| a.album).unwrap_or_default())
+        if let Ok(data) = self.get_json::<AlbumList2Data>("getAlbumList2.view", &[("type", list_type), ("size", &sz_str)]) {
+            if let Some(a) = data.album_list2 {
+                if !a.album.is_empty() {
+                    return Ok(a.album);
+                }
+            }
+        }
+        if let Ok(data) = self.get_json::<AlbumList2Data>("getAlbumList.view", &[("type", list_type), ("size", &sz_str)]) {
+            if let Some(a) = data.album_list2 {
+                return Ok(a.album);
+            }
+        }
+        Ok(vec![])
     }
 
     /// Fetch tracks in an album.
     pub fn get_album_tracks(&self, album_id: &str) -> Result<Vec<SubsonicSong>> {
-        let data: AlbumDetailData = self.get_json("getAlbum.view", &[("id", album_id)])?;
-        Ok(data.album.map(|a| a.song).unwrap_or_default())
+        if let Ok(data) = self.get_json::<AlbumDetailData>("getAlbum.view", &[("id", album_id)]) {
+            if let Some(a) = data.album {
+                if !a.song.is_empty() {
+                    return Ok(a.song);
+                }
+                if !a.entry.is_empty() {
+                    return Ok(a.entry);
+                }
+            }
+        }
+        if let Ok(data) = self.get_json::<DirectoryData>("getMusicDirectory.view", &[("id", album_id)]) {
+            if let Some(d) = data.directory {
+                if !d.child.is_empty() {
+                    return Ok(d.child);
+                }
+            }
+        }
+        Ok(vec![])
+    }
+
+    /// Fetch albums for an artist.
+    pub fn get_artist_albums(&self, artist_id: &str) -> Result<Vec<SubsonicAlbum>> {
+        if let Ok(data) = self.get_json::<ArtistDetailData>("getArtist.view", &[("id", artist_id)]) {
+            if let Some(a) = data.artist {
+                if !a.album.is_empty() {
+                    return Ok(a.album);
+                }
+            }
+        }
+        if let Ok(data) = self.get_json::<DirectoryData>("getMusicDirectory.view", &[("id", artist_id)]) {
+            if let Some(d) = data.directory {
+                let albums: Vec<SubsonicAlbum> = d
+                    .child
+                    .into_iter()
+                    .map(|c| {
+                        let name = c.display_title();
+                        SubsonicAlbum {
+                            id: c.id,
+                            name,
+                            artist: c.artist,
+                            song_count: None,
+                            cover_art: c.cover_art,
+                        }
+                    })
+                    .collect();
+                return Ok(albums);
+            }
+        }
+        Ok(vec![])
     }
 
     /// Fetch all artists.
