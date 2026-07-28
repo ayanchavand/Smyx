@@ -146,18 +146,34 @@ impl App {
     pub fn position_ms(&self) -> u32 {
         match &self.now {
             Some(n) if n.is_playing => {
-                (n.position_ms + n.position_at.elapsed().as_millis() as u32).min(n.duration_ms)
+                let elapsed = n.position_ms + n.position_at.elapsed().as_millis() as u32;
+                if n.duration_ms > 0 {
+                    elapsed.min(n.duration_ms)
+                } else {
+                    elapsed
+                }
             }
-            Some(n) => n.position_ms.min(n.duration_ms),
+            Some(n) => {
+                if n.duration_ms > 0 {
+                    n.position_ms.min(n.duration_ms)
+                } else {
+                    n.position_ms
+                }
+            }
             None => 0,
         }
     }
 
     pub fn seek_to(&mut self, position_ms: u32) {
-        let Some(dur) = self.now.as_ref().map(|n| n.duration_ms) else {
+        if self.now.is_none() {
             return;
+        }
+        let dur = self.now.as_ref().map(|n| n.duration_ms).unwrap_or(0);
+        let new = if dur > 0 {
+            position_ms.min(dur)
+        } else {
+            position_ms
         };
-        let new = position_ms.min(dur);
         let _ = self.engine.seek(new);
         if let Some(n) = self.now.as_mut() {
             n.position_ms = new;

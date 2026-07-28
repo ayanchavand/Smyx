@@ -46,6 +46,7 @@ pub struct Engine {
     pub bands: Arc<Mutex<VisBands>>,
     pub client: SubsonicClient,
     pub current_track_uri: Arc<Mutex<Option<String>>>,
+    pub current_bytes: Arc<Mutex<Option<Vec<u8>>>>,
     event_tx: flume::Sender<EngineEvent>,
 }
 
@@ -62,6 +63,7 @@ impl Engine {
             bands,
             client,
             current_track_uri: Arc::new(Mutex::new(None)),
+            current_bytes: Arc::new(Mutex::new(None)),
             event_tx,
         })
     }
@@ -90,7 +92,7 @@ impl Engine {
 
         let mut bytes = Vec::new();
         res.into_body().as_reader().read_to_end(&mut bytes).context("download audio stream bytes")?;
-        let cursor = Cursor::new(bytes);
+        let cursor = Cursor::new(bytes.clone());
         let decoder = Decoder::new(cursor).context("decode audio format")?;
 
         // Decoder implements rodio::Source; wrap in FftSource for visualizer
@@ -100,6 +102,10 @@ impl Engine {
         sink.stop();
         sink.append(fft_source);
         sink.play();
+
+        if let Ok(mut bytes_guard) = self.current_bytes.lock() {
+            *bytes_guard = Some(bytes);
+        }
 
         if let Ok(mut curr) = self.current_track_uri.lock() {
             *curr = Some(track_uri.to_string());
@@ -165,7 +171,31 @@ impl Engine {
         let _ = self.event_tx.send(EngineEvent::Stopped);
     }
 
-    pub fn seek(&self, _position_ms: u32) -> Result<()> {
+    pub fn seek(&self, position_ms: u32) -> Result<()> {
+        let target_dur = Duration::from_millis(position_ms as u64);
+        let sink = self.sink.lock().unwrap();
+
+        let seek_ok = sink.try_seek(target_dur).is_ok();
+        if !seek_ok {
+            if let Some(bytes) = self.current_bytes.lock().unwrap().clone() {
+                if let Ok(decoder) = Decoder::new(Cursor::new(bytes)) {
+                    let mut fft_source = FftSource::new(decoder, self.bands.clone());
+                    let _ = rodio::Source::try_seek(&mut fft_source, target_dur);
+                    sink.stop();
+                    sink.append(fft_source);
+                    sink.play();
+                }
+            }
+        }
+
+        if let Ok(curr) = self.current_track_uri.lock() {
+            if let Some(ref uri) = *curr {
+                let _ = self.event_tx.send(EngineEvent::PositionCorrection {
+                    uri: uri.clone(),
+                    position_ms,
+                });
+            }
+        }
         Ok(())
     }
 

@@ -218,6 +218,11 @@ where
     fn total_duration(&self) -> Option<Duration> {
         self.inner.total_duration()
     }
+
+    #[inline]
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)
+    }
 }
 
 fn precompute_band_ranges(num_bins: usize, num_bands: usize) -> Vec<(usize, usize)> {
