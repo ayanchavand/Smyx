@@ -3,7 +3,7 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -61,6 +61,7 @@ pub fn render_nowplaying_view(f: &mut Frame, app: &mut App, theme: Theme, area: 
     };
 
     if let Some(cover) = app.now.as_mut().and_then(|n| n.cover.as_mut()) {
+        f.render_widget(Clear, art_rect);
         cover.render(f, art_rect);
     }
 

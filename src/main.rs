@@ -283,11 +283,6 @@ async fn run_ui(
 
         advance_fade(app);
 
-        if app.art_dirty > 0 {
-            terminal.clear()?;
-            app.art_dirty -= 1;
-        }
-
         terminal.draw(|f| render(f, app))?;
 
         while event::poll(Duration::from_millis(0))? {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::cover::Cover;
 use crate::theme::Theme;
 
-pub const FADE_MS: u64 = 300;
+pub const FADE_MS: u64 = 750;
 pub const ART_REPAINTS: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

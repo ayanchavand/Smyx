@@ -202,6 +202,13 @@ pub fn handle_key(
                 }
             }
         }
+        KeyCode::Char('t') => {
+            let cur_name = app.target.name;
+            let idx = crate::theme::THEMES.iter().position(|t| t.name == cur_name).unwrap_or(0);
+            let next = crate::theme::THEMES[(idx + 1) % crate::theme::THEMES.len()];
+            app.status = format!("theme: {}", next.name);
+            app.start_fade(next);
+        }
         KeyCode::Tab | KeyCode::Char(']') => {
             app.searching = false;
             app.section = app.section.shift(1);
