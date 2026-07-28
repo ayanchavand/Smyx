@@ -283,6 +283,18 @@ pub fn handle_action_key(
             };
             app.actions = None;
         }
+        ActionKind::Queue { uri } => {
+            let label = app
+                .cur_items()
+                .iter()
+                .find(|i| i.uri == uri)
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| uri.clone());
+            app.queue.push(label.clone());
+            app.queue_uris.push(uri);
+            app.status = format!("queued {}", label);
+            app.actions = None;
+        }
         ActionKind::AddToPlaylist { playlist_id, track_uri } => {
             let song_id = track_uri.strip_prefix("subsonic:track:").unwrap_or(&track_uri).to_string();
             if let Some(subsonic) = app.subsonic.lock().unwrap().clone() {
@@ -314,6 +326,12 @@ pub fn open_action_menu(app: &mut App) {
     let mut items = Vec::new();
 
     if item.is_track {
+        items.push(ActionItem {
+            label: "Add to queue".to_string(),
+            kind: ActionKind::Queue {
+                uri: item.uri.clone(),
+            },
+        });
         items.push(ActionItem {
             label: "Add to playlist...".to_string(),
             kind: ActionKind::AddToPlaylistMenu {

@@ -303,6 +303,29 @@ impl App {
     }
 
     pub fn play_next(&mut self) {
+        if !self.queue_uris.is_empty() {
+            let next_uri = self.queue_uris.remove(0);
+            if !self.queue.is_empty() {
+                self.queue.remove(0);
+            }
+            let name = self
+                .cur_items()
+                .iter()
+                .find(|i| i.uri == next_uri)
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| "Queued Track".to_string());
+            let subtitle = self
+                .cur_items()
+                .iter()
+                .find(|i| i.uri == next_uri)
+                .map(|i| i.subtitle.clone())
+                .unwrap_or_default();
+
+            let item = LibItem::track(name, subtitle, next_uri);
+            self.play_item(&item);
+            return;
+        }
+
         let items = self.cur_items().to_vec();
         let tracks: Vec<(usize, &LibItem)> = items
             .iter()
