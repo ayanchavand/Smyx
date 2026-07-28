@@ -120,6 +120,23 @@ pub fn spawn_library_fetch(
                 let _ = tx.send((Section::Artists, items));
             }
 
+            // 5. Recent (Recently added albums)
+            if let Ok(recent) = client.get_album_list_by_type("newest", 50) {
+                got_any = true;
+                let items: Vec<LibItem> = recent
+                    .into_iter()
+                    .map(|a| {
+                        let name = a.display_name();
+                        LibItem::ctx(
+                            name,
+                            a.artist.unwrap_or_default(),
+                            format!("subsonic:album:{}", a.id),
+                        )
+                    })
+                    .collect();
+                let _ = tx.send((Section::Recent, items));
+            }
+
             let _ = done_tx.send(got_any);
         })
         .expect("spawn library worker");

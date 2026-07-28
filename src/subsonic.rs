@@ -354,20 +354,30 @@ impl SubsonicClient {
         }
     }
 
-    /// Fetch albums list.
-    pub fn get_album_list(&self, list_type: &str, size: usize) -> Result<Vec<SubsonicAlbum>> {
+    /// Fetch albums list by a specific list type (e.g., "newest").
+    pub fn get_album_list_by_type(&self, list_type: &str, size: usize) -> Result<Vec<SubsonicAlbum>> {
         let sz_str = size.to_string();
+        for endpoint in ["getAlbumList2.view", "getAlbumList.view"] {
+            if let Ok(data) = self.get_json::<AlbumListData>(endpoint, &[("type", list_type), ("size", &sz_str)]) {
+                let albums = data.album_list2
+                    .or(data.album_list)
+                    .map(|c| c.album)
+                    .unwrap_or_default();
+                if !albums.is_empty() {
+                    return Ok(albums);
+                }
+            }
+        }
+        Ok(vec![])
+    }
+
+    /// Fetch albums list with type fallbacks.
+    pub fn get_album_list(&self, list_type: &str, size: usize) -> Result<Vec<SubsonicAlbum>> {
         let types = [list_type, "newest", "frequent", "alphabeticalByName", "random"];
         for t in types {
-            for endpoint in ["getAlbumList2.view", "getAlbumList.view"] {
-                if let Ok(data) = self.get_json::<AlbumListData>(endpoint, &[("type", t), ("size", &sz_str)]) {
-                    let albums = data.album_list2
-                        .or(data.album_list)
-                        .map(|c| c.album)
-                        .unwrap_or_default();
-                    if !albums.is_empty() {
-                        return Ok(albums);
-                    }
+            if let Ok(albums) = self.get_album_list_by_type(t, size) {
+                if !albums.is_empty() {
+                    return Ok(albums);
                 }
             }
         }
