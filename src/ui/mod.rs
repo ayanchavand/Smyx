@@ -47,13 +47,25 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 sp
             })
             .collect();
-    if !app.status.is_empty() {
+    if let Some(ref ver) = app.new_version {
+        let clean_ver = ver.trim_start_matches('v');
+        header.push(Span::styled(
+            format!("   ✦ update v{clean_ver} available: cargo install smyx"),
+            Style::default().fg(theme.primary.into()).add_modifier(Modifier::BOLD),
+        ));
+    } else if !app.status.is_empty() {
         header.push(Span::styled(format!("   {}", app.status), theme.muted()));
     }
-    f.render_widget(Paragraph::new(Line::from(header)), rows[0]);
+    let header_cols = Layout::horizontal([
+        Constraint::Min(20),
+        Constraint::Length(35),
+    ])
+    .split(rows[0]);
+
+    f.render_widget(Paragraph::new(Line::from(header)), header_cols[0]);
     f.render_widget(
         Paragraph::new(Line::from(view_tabs(app, theme))).alignment(Alignment::Right),
-        rows[0],
+        header_cols[1],
     );
 
     let mut total: usize = 3;

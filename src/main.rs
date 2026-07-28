@@ -106,6 +106,21 @@ async fn main() -> Result<()> {
     let (lyrics_tx, lyrics_rx) = flume::unbounded::<(Vec<(u32, String)>, bool)>();
     let (login_tx, login_rx) = flume::unbounded::<Result<(SubsonicClient, NavidromeConfig), String>>();
     let (sel_cover_tx, sel_cover_rx) = flume::unbounded::<(String, image::DynamicImage)>();
+    let (update_tx, update_rx) = flume::unbounded::<String>();
+
+    let update_tx_c = update_tx.clone();
+    tokio::task::spawn_blocking(move || {
+        use update_informer::{registry, Check};
+        let informer = update_informer::new(
+            registry::Crates,
+            "smyx",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .interval(std::time::Duration::from_secs(86400));
+        if let Ok(Some(new_ver)) = informer.check_version() {
+            let _ = update_tx_c.send(new_ver.to_string());
+        }
+    });
 
     let config_opt = NavidromeConfig::load();
     let initial_client = config_opt.as_ref().map(|c| SubsonicClient::new(c.clone()));
@@ -186,6 +201,7 @@ async fn main() -> Result<()> {
         login_rx,
         sel_cover_tx,
         sel_cover_rx,
+        update_rx,
     )
     .await;
 
@@ -216,6 +232,7 @@ async fn run_ui(
     login_rx: flume::Receiver<Result<(SubsonicClient, NavidromeConfig), String>>,
     sel_cover_tx: flume::Sender<(String, image::DynamicImage)>,
     sel_cover_rx: flume::Receiver<(String, image::DynamicImage)>,
+    update_rx: flume::Receiver<String>,
 ) -> Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(33));
 
@@ -291,6 +308,10 @@ async fn run_ui(
             app.selected_cover = Some((uri, cover));
         }
 
+        while let Ok(new_ver) = update_rx.try_recv() {
+            app.new_version = Some(new_ver);
+        }
+
         if app.now.is_none() {
             if let Some(item) = app.cur_items().get(app.selected).cloned() {
                 if item.is_track {
@@ -358,6 +379,7 @@ mod tests {
         let header = LibItem::header("Section Header");
         assert!(context_target(&header).is_none());
     }
+
 
     #[test]
     fn test_enter_label() {

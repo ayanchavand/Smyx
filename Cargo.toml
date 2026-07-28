@@ -30,6 +30,7 @@ fs2 = { version = "0.4", optional = true }
 toml = { version = "0.8", optional = true }
 rodio = { version = "0.21", optional = true }
 ureq = { version = "3", optional = true, features = ["json"] }
+update-informer = { version = "1.2", optional = true }
 
 [features]
 default = ["streaming"]
@@ -44,6 +45,7 @@ streaming = [
     "dep:toml",
     "dep:rodio",
     "dep:ureq",
+    "dep:update-informer",
 ]
 
 # The one, fully-wired binary.

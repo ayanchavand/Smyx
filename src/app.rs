@@ -61,6 +61,7 @@ pub struct App {
     pub last_click: Option<(u16, Instant)>,
     pub selected_cover: Option<(String, Cover)>,
     pub selected_cover_uri: Option<String>,
+    pub new_version: Option<String>,
 }
 
 impl App {
@@ -116,6 +117,7 @@ impl App {
             last_click: None,
             selected_cover: None,
             selected_cover_uri: None,
+            new_version: None,
         }
     }
 
