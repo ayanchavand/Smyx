@@ -1,9 +1,9 @@
 # smyx
 
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
-[![Crates.io Version](https://img.shields.io/crates/v/smyx?style=for-the-badge)](https://crates.io/crates/smyx)
-![GitHub Release](https://img.shields.io/github/v/release/ayanchavand/Smyx?style=for-the-badge)
-![Last Commit](https://img.shields.io/github/last-commit/ayanchavand/Smyx?style=for-the-badge)
+[![Crates.io Version](https://img.shields.io/crates/v/smyx?style=flat-square)](https://crates.io/crates/smyx)
+[![GitHub Release](https://img.shields.io/github/v/release/ayanchavand/Smyx?style=flat-square)](https://github.com/ayanchavand/Smyx/releases)
+[![Last Commit](https://img.shields.io/github/last-commit/ayanchavand/Smyx?style=flat-square)](https://github.com/ayanchavand/Smyx/commits/main)
 
 A lean, beautiful terminal Navidrome / OpenSubsonic player in Rust. Features
 album-art-reactive theming, a live audio visualizer, and synced lyrics.
