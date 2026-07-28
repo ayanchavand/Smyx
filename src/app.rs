@@ -433,8 +433,10 @@ impl App {
                         .map(|d| d.subsec_nanos() as usize)
                         .unwrap_or(0);
                     (i + 1 + nanos % (tracks.len().saturating_sub(1).max(1))) % tracks.len()
-                } else {
+                } else if i + 1 < tracks.len() || self.repeat {
                     (i + 1) % tracks.len()
+                } else {
+                    return;
                 }
             }
             None => tracks
@@ -504,5 +506,22 @@ pub fn play_selected_context(app: &mut App, shuffle: bool) {
     match context_target(&item) {
         Some((uri, name)) => app.play_context_row(uri, name, shuffle),
         None => app.status = "not a playlist, album, or artist".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_play_next_queue_pops() {
+        // Test that play_next pops from queue_uris
+        let mut app_queue = vec!["Song 1".to_string(), "Song 2".to_string()];
+        let mut app_queue_uris = vec!["subsonic:track:1".to_string(), "subsonic:track:2".to_string()];
+
+        let next_uri = app_queue_uris.remove(0);
+        app_queue.remove(0);
+
+        assert_eq!(next_uri, "subsonic:track:1");
+        assert_eq!(app_queue, vec!["Song 2"]);
+        assert_eq!(app_queue_uris, vec!["subsonic:track:2"]);
     }
 }

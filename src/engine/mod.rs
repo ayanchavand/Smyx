@@ -54,16 +54,57 @@ impl Engine {
     pub fn new(client: SubsonicClient, event_tx: flume::Sender<EngineEvent>) -> Result<Self> {
         let stream = OutputStreamBuilder::open_default_stream()
             .context("failed to initialize default audio output stream")?;
-        let sink = Sink::connect_new(stream.mixer());
+        let sink = Arc::new(Mutex::new(Sink::connect_new(stream.mixer())));
         let bands = VisBands::shared();
+        let current_track_uri = Arc::new(Mutex::new(None));
+        let current_bytes = Arc::new(Mutex::new(None));
+
+        {
+            let sink_clone = sink.clone();
+            let uri_clone = current_track_uri.clone();
+            let event_tx_clone = event_tx.clone();
+
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(100));
+
+                    let current_uri = {
+                        if let Ok(guard) = uri_clone.lock() {
+                            guard.clone()
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some(uri) = current_uri {
+                        let is_empty = {
+                            if let Ok(sink) = sink_clone.lock() {
+                                sink.empty()
+                            } else {
+                                false
+                            }
+                        };
+
+                        if is_empty {
+                            if let Ok(mut guard) = uri_clone.lock() {
+                                if guard.as_ref() == Some(&uri) {
+                                    *guard = None;
+                                    let _ = event_tx_clone.send(EngineEvent::EndOfTrack { uri });
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         Ok(Self {
             _stream: stream,
-            sink: Arc::new(Mutex::new(sink)),
+            sink,
             bands,
             client,
-            current_track_uri: Arc::new(Mutex::new(None)),
-            current_bytes: Arc::new(Mutex::new(None)),
+            current_track_uri,
+            current_bytes,
             event_tx,
         })
     }
@@ -164,6 +205,9 @@ impl Engine {
     pub fn stop(&self) {
         let sink = self.sink.lock().unwrap();
         sink.stop();
+        if let Ok(mut curr) = self.current_track_uri.lock() {
+            *curr = None;
+        }
         if let Ok(mut g) = self.bands.lock() {
             g.values.fill(0.0);
             g.is_active = false;

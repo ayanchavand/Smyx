@@ -317,7 +317,19 @@ pub fn handle_action_key(
             };
             app.actions = None;
         }
-        ActionKind::Queue { uri } | ActionKind::PlayNext { uri } => {
+        ActionKind::Queue { uri } => {
+            let label = app
+                .cur_items()
+                .iter()
+                .find(|i| i.uri == uri)
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| uri.clone());
+            app.queue.push(label.clone());
+            app.queue_uris.push(uri);
+            app.status = format!("queued: {}", label);
+            app.actions = None;
+        }
+        ActionKind::PlayNext { uri } => {
             let label = app
                 .cur_items()
                 .iter()
@@ -594,8 +606,10 @@ pub fn handle_engine_event(app: &mut App, ev: EngineEvent, meta_tx: &flume::Send
                 n.position_at = Instant::now();
             }
         }
-        EngineEvent::EndOfTrack { .. } => {
-            app.play_next();
+        EngineEvent::EndOfTrack { uri } => {
+            if app.now.as_ref().is_some_and(|n| n.uri == uri) {
+                app.play_next();
+            }
         }
     }
 }
