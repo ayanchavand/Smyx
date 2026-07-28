@@ -1,63 +1,46 @@
 # smyx
 
-A lean, beautiful terminal Spotify player in Rust. Streams natively as a Spotify
-Connect device, with album-art-reactive theming, a live audio visualizer, and
-synced lyrics.
+A lean, beautiful terminal Navidrome / OpenSubsonic player in Rust. Features
+album-art-reactive theming, a live audio visualizer, and synced lyrics.
 
-<p align="center"><img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/myx.png" alt="smyx recolors the whole interface to the album art" width="100%"></p>
+<p align="center"><img src="assets/preview.png" alt="smyx recolors the whole interface to the album art" width="100%"></p>
 
 <p align="center">
-  <img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/theme-1.png" width="32%">
-  <img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/theme-2.png" width="32%">
-  <img src="https://github.com/HaseebKhalid1507/Myx/releases/download/readme-assets/theme-3.png" width="32%">
+  <img src="assets/theme-1.png" width="32%">
+  <img src="assets/theme-2.png" width="32%">
+  <img src="assets/theme-3.png" width="32%">
 </p>
 
-> Requires **Spotify Premium**. Works on Linux, macOS, and Windows. Album art is
-> crispest on kitty, WezTerm, or foot.
+> Requires a **Navidrome** or **OpenSubsonic** compatible server. Works on Linux, macOS, and Windows. Album art is
+> crispest on Kitty, WezTerm, or foot.
 
 ## Install
 
+Install via [Cargo](https://crates.io) (all platforms — Linux, macOS, Windows):
+
 ```bash
-# Arch (AUR)
-yay -S smyx
-
-# macOS / Linux (Homebrew)
-brew install HaseebKhalid1507/homebrew-tap/smyx
-
-# Cargo (all platforms — Linux, macOS, Windows)
 cargo install smyx
-
-# Prebuilt binary (Linux x86_64, macOS)
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/HaseebKhalid1507/Myx/releases/latest/download/smyx-installer.sh | sh
 ```
 
-On **Windows**, install [Rust](https://rustup.rs) first, then `cargo install smyx` in
-PowerShell. Set `SMYX_CLIENT_ID` as an environment variable or place your client ID in
-`%USERPROFILE%\.config\smyx\client_id`.
+Or build from source:
 
-Or grab a `.deb` / archive from [Releases](https://github.com/HaseebKhalid1507/Myx/releases),
-or build from source: `cargo install --path .`.
+```bash
+git clone https://github.com/HaseebKhalid1507/Myx.git
+cd Myx
+cargo install --path .
+```
 
 ## Get started
 
-You need a free Spotify app client ID (one minute):
-
-1. [Spotify developer dashboard](https://developer.spotify.com/dashboard), then **Create app**
-2. Add the redirect URI `http://127.0.0.1:8989/login`
-3. Copy the **Client ID** and set it:
-
-```bash
-export SMYX_CLIENT_ID=<your-client-id>
-```
-
-Then run:
+Run `smyx` in your terminal:
 
 ```bash
 smyx
 ```
 
-First launch opens your browser to log in (OAuth PKCE, no secret needed). Then
-browse with `↑↓` and hit `⏎` to play. After that, just `smyx`.
+On first launch, an interactive login modal will prompt you for your Navidrome / OpenSubsonic server URL, username, and password.
+
+Configurations are automatically saved to `~/.config/smyx/navidrome.toml` (or `%USERPROFILE%\.config\smyx\navidrome.toml` on Windows).
 
 ## Keys
 
@@ -77,11 +60,12 @@ focused. Mouse works too: click tabs, click a track, double-click to play.
 
 ## Credits
 
-Streaming adapts pieces of [spotify-player](https://github.com/aome510/spotify-player)
-(MIT, © Thang Pham); visual language after [noodle](https://github.com/wilfredinni/noodle);
-built on [ratatui](https://ratatui.rs) and [librespot](https://github.com/librespot-org/librespot).
+`smyx` is a fork of [Myx](https://github.com/HaseebKhalid1507/Myx), which was originally a TUI for Spotify client.
+
+Built on [ratatui](https://ratatui.rs), [rodio](https://github.com/RustAudio/rodio), and [rustfft](https://github.com/ejmahler/RustFFT). Visual language inspired by [noodle](https://github.com/wilfredinni/noodle).
 See [NOTICE](NOTICE).
 
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
