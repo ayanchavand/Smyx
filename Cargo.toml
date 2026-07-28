@@ -1,14 +1,14 @@
 [package]
 name = "smyx"
-version = "0.2.5"
+version = "0.2.7"
 edition = "2021"
 description = "A lean, beautiful terminal Navidrome / OpenSubsonic player"
-authors = ["Haseeb Khalid"]
+authors = ["Ayan Chavand", "Haseeb Khalid"]
 license = "MIT"
-repository = "https://github.com/HaseebKhalid1507/Myx"
-homepage = "https://github.com/HaseebKhalid1507/Myx"
+repository = "https://github.com/ayanchavand/Smyx"
+homepage = "https://github.com/ayanchavand/Smyx"
 readme = "README.md"
-keywords = ["navidrome", "subsonic", "tui", "music", "player", "ratatui"]
+keywords = ["navidrome", "subsonic", "tui", "music", "ratatui"]
 categories = ["command-line-utilities", "multimedia::audio"]
 default-run = "smyx"
 
