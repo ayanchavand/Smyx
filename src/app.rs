@@ -240,19 +240,50 @@ impl App {
         }
         if item.is_play {
             if item.uri == "smyx:action:liked-play" {
-                let uris: Vec<String> = self
+                let mut tracks: Vec<LibItem> = self
                     .library
                     .liked
                     .iter()
                     .filter(|i| i.is_track)
-                    .map(|i| i.uri.clone())
+                    .cloned()
                     .collect();
-                if !uris.is_empty() {
+                if !tracks.is_empty() {
+                    if self.shuffle {
+                        use std::time::SystemTime;
+                        let nanos = SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .map(|d| d.subsec_nanos() as usize)
+                            .unwrap_or(0);
+                        let len = tracks.len();
+                        for i in (1..len).rev() {
+                            let j = (nanos + i * 31) % (i + 1);
+                            tracks.swap(i, j);
+                        }
+                    }
                     self.source = PlaySource::Liked;
                     self.source_name = "Liked Songs".to_string();
                     self.status = "starting Liked Songs…".to_string();
-                    if let Err(e) = self.engine.play_tracks(uris, None, 0, self.shuffle) {
-                        self.status = format!("couldn't play: {e:#}");
+                    let first = &tracks[0];
+                    if let Some(id) = first.uri.strip_prefix("subsonic:track:") {
+                        if let Err(e) = self.engine.play_track_id(id) {
+                            self.status = format!("couldn't play: {e:#}");
+                        } else {
+                            self.now = Some(NowPlaying {
+                                uri: first.uri.clone(),
+                                title: first.name.clone(),
+                                artist: first.subtitle.clone(),
+                                album: String::new(),
+                                duration_ms: 0,
+                                position_ms: 0,
+                                position_at: Instant::now(),
+                                is_playing: true,
+                                cover: None,
+                            });
+                            self.playback_started = true;
+                            self.status = format!("Playing {}", first.name);
+                            self.queue_uris = tracks[1..].iter().map(|t| t.uri.clone()).collect();
+                            self.queue = tracks[1..].iter().map(|t| t.name.clone()).collect();
+                        }
                     }
                 }
                 return Activated::None;
@@ -271,6 +302,10 @@ impl App {
                 if let Err(e) = self.engine.play_track_id(id) {
                     self.status = format!("Playback error: {}", e);
                 } else {
+                    if self.section == Section::Liked && self.details.is_empty() {
+                        self.source = PlaySource::Liked;
+                        self.source_name = "Liked Songs".to_string();
+                    }
                     self.now = Some(NowPlaying {
                         uri: item.uri.clone(),
                         title: item.name.clone(),

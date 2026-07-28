@@ -73,7 +73,7 @@ pub fn handle_key(
 
     // --- Actions menu captures input while open ---
     if app.actions.is_some() {
-        handle_action_key(app, code, detail_tx);
+        handle_action_key(app, code, lib_tx, libdone_tx, detail_tx);
         return false;
     }
 
@@ -174,6 +174,34 @@ pub fn handle_key(
         KeyCode::Char('a') => {
             open_action_menu(app);
         }
+        KeyCode::Char('l') => {
+            if let Some(item) = app.cur_items().get(app.selected).cloned() {
+                if item.is_track {
+                    if let Some(id) = item.uri.strip_prefix("subsonic:track:") {
+                        let id = id.to_string();
+                        if let Some(subsonic) = app.subsonic.lock().unwrap().clone() {
+                            let is_liked = app.library.liked.iter().any(|i| i.uri == item.uri);
+                            let lib_tx = lib_tx.clone();
+                            let libdone_tx = libdone_tx.clone();
+                            let client_arc = app.subsonic.clone();
+                            if is_liked {
+                                app.status = format!("unliking {}…", item.name);
+                                std::thread::spawn(move || {
+                                    let _ = subsonic.unstar(&id);
+                                    spawn_library_fetch(client_arc, lib_tx, libdone_tx);
+                                });
+                            } else {
+                                app.status = format!("liking {}…", item.name);
+                                std::thread::spawn(move || {
+                                    let _ = subsonic.star(&id);
+                                    spawn_library_fetch(client_arc, lib_tx, libdone_tx);
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         KeyCode::Tab | KeyCode::Char(']') => {
             app.searching = false;
             app.section = app.section.shift(1);
@@ -208,6 +236,8 @@ pub fn handle_key(
 pub fn handle_action_key(
     app: &mut App,
     code: KeyCode,
+    lib_tx: &flume::Sender<(Section, Vec<LibItem>)>,
+    libdone_tx: &flume::Sender<bool>,
     detail_tx: &flume::Sender<(String, String, Vec<LibItem>)>,
 ) {
     match code {
@@ -309,6 +339,40 @@ pub fn handle_action_key(
             }
             app.actions = None;
         }
+        ActionKind::StarTrack { track_uri } => {
+            let song_id = track_uri.strip_prefix("subsonic:track:").unwrap_or(&track_uri).to_string();
+            if let Some(subsonic) = app.subsonic.lock().unwrap().clone() {
+                let sid = song_id.clone();
+                let lib_tx = lib_tx.clone();
+                let libdone_tx = libdone_tx.clone();
+                let client_arc = app.subsonic.clone();
+                std::thread::spawn(move || {
+                    let _ = subsonic.star(&sid);
+                    spawn_library_fetch(client_arc, lib_tx, libdone_tx);
+                });
+                app.status = "liked track".to_string();
+            } else {
+                app.status = "not connected".to_string();
+            }
+            app.actions = None;
+        }
+        ActionKind::UnstarTrack { track_uri } => {
+            let song_id = track_uri.strip_prefix("subsonic:track:").unwrap_or(&track_uri).to_string();
+            if let Some(subsonic) = app.subsonic.lock().unwrap().clone() {
+                let sid = song_id.clone();
+                let lib_tx = lib_tx.clone();
+                let libdone_tx = libdone_tx.clone();
+                let client_arc = app.subsonic.clone();
+                std::thread::spawn(move || {
+                    let _ = subsonic.unstar(&sid);
+                    spawn_library_fetch(client_arc, lib_tx, libdone_tx);
+                });
+                app.status = "unliked track".to_string();
+            } else {
+                app.status = "not connected".to_string();
+            }
+            app.actions = None;
+        }
         _other => {
             app.actions = None;
         }
@@ -326,6 +390,22 @@ pub fn open_action_menu(app: &mut App) {
     let mut items = Vec::new();
 
     if item.is_track {
+        let is_liked = app.library.liked.iter().any(|i| i.uri == item.uri);
+        if is_liked {
+            items.push(ActionItem {
+                label: "Unlike track".to_string(),
+                kind: ActionKind::UnstarTrack {
+                    track_uri: item.uri.clone(),
+                },
+            });
+        } else {
+            items.push(ActionItem {
+                label: "Like track".to_string(),
+                kind: ActionKind::StarTrack {
+                    track_uri: item.uri.clone(),
+                },
+            });
+        }
         items.push(ActionItem {
             label: "Add to queue".to_string(),
             kind: ActionKind::Queue {

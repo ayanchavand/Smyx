@@ -231,6 +231,12 @@ pub enum ActionKind {
     CopyLink {
         uri: String,
     },
+    StarTrack {
+        track_uri: String,
+    },
+    UnstarTrack {
+        track_uri: String,
+    },
 }
 
 pub struct ActionItem {

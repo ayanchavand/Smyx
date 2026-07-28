@@ -155,12 +155,15 @@ pub struct PlaylistDetailContainer {
 #[derive(Debug, Deserialize)]
 pub struct Starred2Data {
     pub starred2: Option<Starred2Container>,
+    pub starred: Option<Starred2Container>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Starred2Container {
     #[serde(default)]
     pub song: Vec<SubsonicSong>,
+    #[serde(default)]
+    pub entry: Vec<SubsonicSong>,
     #[serde(default)]
     pub album: Vec<SubsonicAlbum>,
     #[serde(default)]
@@ -346,12 +349,31 @@ impl SubsonicClient {
 
     /// Fetch starred (liked) songs, albums, and artists.
     pub fn get_starred(&self) -> Result<(Vec<SubsonicSong>, Vec<SubsonicAlbum>, Vec<SubsonicArtist>)> {
-        let data: Starred2Data = self.get_json("getStarred2.view", &[])?;
-        if let Some(starred) = data.starred2 {
-            Ok((starred.song, starred.album, starred.artist))
-        } else {
-            Ok((vec![], vec![], vec![]))
+        for endpoint in ["getStarred2.view", "getStarred.view"] {
+            if let Ok(data) = self.get_json::<Starred2Data>(endpoint, &[]) {
+                if let Some(starred) = data.starred2.or(data.starred) {
+                    let songs = if !starred.song.is_empty() {
+                        starred.song
+                    } else {
+                        starred.entry
+                    };
+                    return Ok((songs, starred.album, starred.artist));
+                }
+            }
         }
+        Ok((vec![], vec![], vec![]))
+    }
+
+    /// Star (like) a track, album, or artist by ID.
+    pub fn star(&self, id: &str) -> Result<()> {
+        let _data: serde_json::Value = self.get_json("star.view", &[("id", id)])?;
+        Ok(())
+    }
+
+    /// Unstar (unlike) a track, album, or artist by ID.
+    pub fn unstar(&self, id: &str) -> Result<()> {
+        let _data: serde_json::Value = self.get_json("unstar.view", &[("id", id)])?;
+        Ok(())
     }
 
     /// Fetch albums list by a specific list type (e.g., "newest").
@@ -545,5 +567,39 @@ mod tests {
         let playlists = wrapper.response.data.playlists.unwrap().playlist;
         assert_eq!(playlists.len(), 1);
         assert_eq!(playlists[0].name, "Chill Vibes");
+    }
+
+    #[test]
+    fn test_parse_starred_response() {
+        let json_str2 = r#"{
+            "subsonic-response": {
+                "status": "ok",
+                "starred2": {
+                    "song": [
+                        { "id": "s1", "title": "Liked Track 1", "artist": "Artist A" }
+                    ]
+                }
+            }
+        }"#;
+        let wrapper2: SubsonicResponseWrapper<Starred2Data> = serde_json::from_str(json_str2).unwrap();
+        let starred2 = wrapper2.response.data.starred2.or(wrapper2.response.data.starred).unwrap();
+        assert_eq!(starred2.song.len(), 1);
+        assert_eq!(starred2.song[0].display_title(), "Liked Track 1");
+
+        let json_str1 = r#"{
+            "subsonic-response": {
+                "status": "ok",
+                "starred": {
+                    "entry": [
+                        { "id": "s2", "title": "Liked Track 2", "artist": "Artist B" }
+                    ]
+                }
+            }
+        }"#;
+        let wrapper1: SubsonicResponseWrapper<Starred2Data> = serde_json::from_str(json_str1).unwrap();
+        let starred1 = wrapper1.response.data.starred2.or(wrapper1.response.data.starred).unwrap();
+        let songs = if !starred1.song.is_empty() { starred1.song } else { starred1.entry };
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].display_title(), "Liked Track 2");
     }
 }

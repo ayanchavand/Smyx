@@ -73,7 +73,7 @@ pub fn spawn_library_fetch(
             // 2. Liked (Starred)
             if let Ok((songs, _, _)) = client.get_starred() {
                 got_any = true;
-                let items: Vec<LibItem> = songs
+                let tracks: Vec<LibItem> = songs
                     .into_iter()
                     .map(|s| {
                         LibItem::track(
@@ -83,8 +83,17 @@ pub fn spawn_library_fetch(
                         )
                     })
                     .collect();
-                let _ = tx.send((Section::Home, items.clone()));
-                let _ = tx.send((Section::Liked, items));
+                let _ = tx.send((Section::Home, tracks.clone()));
+
+                let mut liked_items = Vec::new();
+                if !tracks.is_empty() {
+                    liked_items.push(LibItem::play(
+                        "▶ Play Liked Songs".to_string(),
+                        "smyx:action:liked-play".to_string(),
+                    ));
+                    liked_items.extend(tracks);
+                }
+                let _ = tx.send((Section::Liked, liked_items));
             }
 
             // 3. Albums
