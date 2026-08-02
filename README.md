@@ -1,6 +1,7 @@
 # smyx
 
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
+![Crates.io Downloads (recent)](https://img.shields.io/crates/dr/smyx)
 [![Crates.io Version](https://img.shields.io/crates/v/smyx?style=flat-square)](https://crates.io/crates/smyx)
 [![GitHub Release](https://img.shields.io/github/v/release/ayanchavand/Smyx?style=flat-square)](https://github.com/ayanchavand/Smyx/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/ayanchavand/Smyx?style=flat-square)](https://github.com/ayanchavand/Smyx/commits/main)
